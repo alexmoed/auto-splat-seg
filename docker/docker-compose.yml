@@ -1,0 +1,49 @@
+# Single-service compose for the splat-segmentation pipeline.
+#
+# vLLM is launched inside the same container by entrypoint.sh, so
+# we only need one service. Both Qwen weights and the scene dir are
+# mounted in via volumes.
+#
+# Usage:
+#   cd docker/
+#   cp .env.example .env       # then edit paths
+#   docker compose run --rm pipeline bash
+#   # or:
+#   docker compose run --rm pipeline \
+#       python /workspace/pipeline/run_all.py /workspace/scene --step 2
+services:
+  pipeline:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: splat-pipeline:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Equivalent for older docker installs that don't support deploy:
+    # runtime: nvidia
+    environment:
+      - QWEN_URL=http://127.0.0.1:8000/v1
+      - QWEN_MODEL=qwen36-awq
+      - QWEN_MODEL_PATH=/models/qwen36-awq
+      - QWEN_GPU_MEMORY_UTILIZATION=${QWEN_GPU_MEMORY_UTILIZATION:-0.65}
+      - QWEN_MAX_MODEL_LEN=${QWEN_MAX_MODEL_LEN:-4096}
+    volumes:
+      # Qwen weights — read-only mount.
+      - ${QWEN_WEIGHTS_HOST_PATH}:/models/qwen36-awq:ro
+      # Scene directory — read-write so the pipeline can write outputs.
+      - ${SCENE_HOST_PATH}:/workspace/scene
+    # Map vLLM port to host for debugging (optional).
+    ports:
+      - "8000:8000"
+    # IPC namespace for shared-memory PyTorch tensors (vLLM expects this).
+    ipc: host
+    shm_size: 16gb
+    stdin_open: true
+    tty: true
+    # Override the default `bash` CMD via:
+    #   docker compose run --rm pipeline python /workspace/pipeline/run_all.py /workspace/scene --step 2

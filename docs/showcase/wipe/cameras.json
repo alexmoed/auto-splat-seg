@@ -1,0 +1,24 @@
+{
+  "scene": "Kitchen_living_dining_v13",
+  "background_ply": "step7_cardinal_aligned.ply",
+  "objects": {
+    "grey_armchair": {
+      "object_ply": "02_grey_armchair/5_sweep_fallback.ply",
+      "eye": [-1.69114, 0.36493, -0.00492],
+      "target": [-1.64492, 0.4393, 0.28202],
+      "up": [0, -1, 0],
+      "fov": 50,
+      "width": 1920,
+      "height": 1080
+    },
+    "beige_sectional_sofa": {
+      "object_ply": "02_beige_sectional_sofa/5_sweep_fallback.ply",
+      "eye": [-5.70388, 0.12532, 2.51205],
+      "target": [-5.01639, 1.07478, 0.7506],
+      "up": [0, -1, 0],
+      "fov": 50,
+      "width": 1920,
+      "height": 1080
+    }
+  }
+}

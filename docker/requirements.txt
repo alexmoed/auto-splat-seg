@@ -1,0 +1,22 @@
+# Pipeline dependencies for the pipeline splat segmentation scripts.
+#
+# The base image (vllm/vllm-openai) already provides:
+#   torch, transformers, vllm, accelerate, safetensors, tokenizers,
+#   numpy, openai, pillow, tqdm, huggingface_hub
+# So we only list the extra deps the pipeline needs on top.
+#
+# Pinned to versions known to work together with the base image.
+
+# Geometry / rendering
+gsplat==1.5.3
+plyfile==1.1.3
+scipy==1.17.1
+opencv-python-headless==4.10.0.84
+
+# Persistent SAM3 server (sam_server.py) — keeps the SAM weights loaded
+# once across the whole pipeline. vLLM ships its own FastAPI/uvicorn,
+# but pinning explicitly so the version doesn't surprise us.
+fastapi==0.115.4
+uvicorn==0.32.0
+
+# (transformers / torch / numpy / openai / pillow already in base image)
