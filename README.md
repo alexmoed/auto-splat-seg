@@ -1,4 +1,4 @@
-# Room pipeline — Gaussian splat scene segmentation
+# Gaussian splat scene segmentation
 
 Decomposes a Gaussian splat scan of a room (`.ply`) into a labeled set of
 individual furniture / decor objects (`.splat` puzzle pieces) plus the
