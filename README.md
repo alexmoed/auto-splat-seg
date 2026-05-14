@@ -1,1 +1,1 @@
-# auto-splat-seg
+# Auto Splat Seg
