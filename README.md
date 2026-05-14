@@ -20,19 +20,20 @@ The full set reassembles into the original scan.
 
 ### Object isolation
 
-Each pair below is rendered from the **same camera** — left is the
-original scan, right is a single isolated `.splat` extracted by the
-pipeline. Matched cameras mean a website can wipe-cross-dissolve
-between them.
+Each row is rendered from the **same camera** — left is the original
+scan, right is a single isolated `.splat` extracted by the pipeline.
+Matched cameras mean a website can wipe-cross-dissolve between them.
 
-| Object | In context | Isolated |
-|---|---|---|
-| Armchair | ![](docs/showcase/wipe/grey_armchair_background.png) | ![](docs/showcase/wipe/grey_armchair_object.png) |
-| Sectional sofa | ![](docs/showcase/wipe/beige_sectional_sofa_background.png) | ![](docs/showcase/wipe/beige_sectional_sofa_object.png) |
-| Coffee table | ![](docs/showcase/wipe/wooden_coffee_table_background.png) | ![](docs/showcase/wipe/wooden_coffee_table_object.png) |
-| Sideboard | ![](docs/showcase/wipe/wooden_sideboard_background.png) | ![](docs/showcase/wipe/wooden_sideboard_object.png) |
+![Object isolation showcase](docs/showcase/wipe/_grid.png)
 
-Camera specs in [`docs/showcase/wipe/cameras.json`](docs/showcase/wipe/cameras.json).
+Per-object side-by-sides + camera specs:
+[grey_armchair](docs/showcase/wipe/grey_armchair_pair.png) ·
+[beige_sectional_sofa](docs/showcase/wipe/beige_sectional_sofa_pair.png) ·
+[wooden_coffee_table](docs/showcase/wipe/wooden_coffee_table_pair.png) ·
+[wooden_sideboard](docs/showcase/wipe/wooden_sideboard_pair.png) ·
+[cameras.json](docs/showcase/wipe/cameras.json).
+
+Regenerate the grid with `python pipeline/build_showcase.py`.
 
 ## How it works
 
