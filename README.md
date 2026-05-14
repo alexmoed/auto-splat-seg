@@ -20,9 +20,10 @@ The full set reassembles into the original scan.
 
 ### Object isolation
 
-Each row is rendered from the **same camera** — left is the original
-scan, right is a single isolated `.splat` extracted by the pipeline.
-Matched cameras mean a website can wipe-cross-dissolve between them.
+Four picks from ~35 objects the pipeline pulled out of this single
+scene. Each row is rendered from the **same camera** — left is the
+original scan, right is the isolated `.splat`. Matched cameras mean a
+website can wipe-cross-dissolve between them.
 
 ![Object isolation showcase](docs/showcase/wipe/_grid.png)
 
