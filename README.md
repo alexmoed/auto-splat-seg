@@ -18,6 +18,22 @@ Output: per-object `.splat` files (couch, armchair, stool, kitchen
 island, paintings, etc.) + `_background.splat` (walls / floor / ceiling).
 The full set reassembles into the original scan.
 
+### Object isolation
+
+Each pair below is rendered from the **same camera** — left is the
+original scan, right is a single isolated `.splat` extracted by the
+pipeline. Matched cameras mean a website can wipe-cross-dissolve
+between them.
+
+| Object | In context | Isolated |
+|---|---|---|
+| Armchair | ![](docs/showcase/wipe/grey_armchair_background.png) | ![](docs/showcase/wipe/grey_armchair_object.png) |
+| Sectional sofa | ![](docs/showcase/wipe/beige_sectional_sofa_background.png) | ![](docs/showcase/wipe/beige_sectional_sofa_object.png) |
+| Coffee table | ![](docs/showcase/wipe/wooden_coffee_table_background.png) | ![](docs/showcase/wipe/wooden_coffee_table_object.png) |
+| Sideboard | ![](docs/showcase/wipe/wooden_sideboard_background.png) | ![](docs/showcase/wipe/wooden_sideboard_object.png) |
+
+Camera specs in [`docs/showcase/wipe/cameras.json`](docs/showcase/wipe/cameras.json).
+
 ## How it works
 
 1. **Foundation alignment** — rotate scan so floor is y-down and walls

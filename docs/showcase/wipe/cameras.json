@@ -1,24 +1,39 @@
 {
-  "scene": "Kitchen_living_dining_v13",
-  "background_ply": "step7_cardinal_aligned.ply",
+  "common": {
+    "up": [0, -1, 0],
+    "fov": 50,
+    "width": 1920,
+    "height": 1080
+  },
   "objects": {
     "grey_armchair": {
+      "scene": "Kitchen_living_dining_v13",
       "object_ply": "02_grey_armchair/5_sweep_fallback.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
       "eye": [-1.69114, 0.36493, -0.00492],
-      "target": [-1.64492, 0.4393, 0.28202],
-      "up": [0, -1, 0],
-      "fov": 50,
-      "width": 1920,
-      "height": 1080
+      "target": [-1.64492, 0.4393, 0.28202]
     },
     "beige_sectional_sofa": {
+      "scene": "Kitchen_living_dining_v13",
       "object_ply": "02_beige_sectional_sofa/5_sweep_fallback.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
       "eye": [-5.70388, 0.12532, 2.51205],
-      "target": [-5.01639, 1.07478, 0.7506],
-      "up": [0, -1, 0],
-      "fov": 50,
-      "width": 1920,
-      "height": 1080
+      "target": [-5.01639, 1.07478, 0.7506]
+    },
+    "wooden_coffee_table": {
+      "scene": "Kitchen_living_dining_v14",
+      "object_ply": "02_wooden_coffee_table/5_sweep_fallback.ply",
+      "object_ply_source": "Kitchen_living_dining_v12/02_coffee_table_2/5_sweep_fallback.ply (v12 splats copied in 2026-05-14)",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [-4.64932, 0.1188, 2.13332],
+      "target": [-4.0872, 1.40404, 0.83771]
+    },
+    "wooden_sideboard": {
+      "scene": "Kitchen_living_dining_v13",
+      "object_ply": "02_wooden_sideboard/5_sweep_fallback.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [-1.53331, 0.44782, 0.52237],
+      "target": [-2.05834, 0.85118, -1.15307]
     }
   }
 }
