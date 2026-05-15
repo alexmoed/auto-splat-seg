@@ -33,3 +33,7 @@ pipeline/**/final_outputs/
 # Local env vars (compose .env with absolute host paths)
 .env
 docker/.env
+
+# heavy showcase packaging — kept local, not in repo
+docs/showcase/splats/
+docs/showcase/armchair_walkthrough/
