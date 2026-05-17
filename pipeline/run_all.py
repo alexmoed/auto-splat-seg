@@ -511,6 +511,28 @@ def run_group_and_subtract(scene_dir: Path):
         sys.exit(f"[fatal] subtract.py exited {r.returncode}")
 
 
+def run_inside_outside_per_object(scene_dir: Path):
+    """Stage 6 — final inside/outside refinement per object.
+
+    For each 02_<slug>/, inside_outside.py reads the object's final PLY
+    and its 4_sam_tight masks, computes per-splat insideness, and drops
+    the clearly-outside splats (Qwen-picked threshold via --auto, with
+    legs/feet/supports as the absolute priority). Writes
+    6_inside_outside.ply, which extract_final_outputs prefers.
+
+    Bookshelves / open shelving are exempt — handled inside
+    inside_outside.py (passed through unchanged)."""
+    obj_dirs = sorted([d for d in scene_dir.iterdir()
+                       if d.is_dir() and d.name.startswith("02_")])
+    print(f"\n[step 2.c] inside_outside × {len(obj_dirs)} objects")
+    for od in obj_dirs:
+        cmd = [sys.executable, str(ITERATION_DIR / "inside_outside.py"),
+               str(od), "--auto"]
+        r = subprocess.run(cmd)
+        if r.returncode != 0:
+            print(f"[warn] inside_outside.py exited {r.returncode} on {od.name}")
+
+
 def step_2(scene_dir: Path):
     """Per-object extraction via procedure dispatch (general / tv / bookshelf
     / rug / skip). Each object gets its 1_visual_hull.ply refined into
@@ -518,17 +540,20 @@ def step_2(scene_dir: Path):
 
     After the per-object loop finishes, automatically detects parent-child
     groups (TV+speakers on a stand → stand is parent) and subtracts child
-    splats from parent PLYs (5_subtracted.ply per parent)."""
+    splats from parent PLYs (5_subtracted.ply per parent). Finally a
+    Stage-6 inside/outside refinement trims clearly-outside splats."""
     run_dispatch_per_object(scene_dir)
     run_group_and_subtract(scene_dir)
+    run_inside_outside_per_object(scene_dir)
     write_manifest(scene_dir)
 
 
 def step_3(scene_dir: Path):
-    """Standalone group + subtract — same work as the tail of step 2.
-    Kept for re-running after manual fixes to per-object PLYs without
-    redoing the full dispatch loop."""
+    """Standalone group + subtract + inside/outside — same work as the
+    tail of step 2. Kept for re-running after manual fixes to per-object
+    PLYs without redoing the full dispatch loop."""
     run_group_and_subtract(scene_dir)
+    run_inside_outside_per_object(scene_dir)
 
 
 def main():

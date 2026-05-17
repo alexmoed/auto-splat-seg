@@ -343,6 +343,24 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
     meta = json.load(open(meta_path))
     label = meta.get("label", "object")
 
+    # Sibling objects that each get their OWN extraction. A sub-item that
+    # is one of these must not ride along in this parent's compound carve
+    # (it would be re-carved at parent scale and mangled — e.g. a lamp on
+    # a sideboard). Qwen is told to exclude them, and a post-filter drops
+    # any that slip through.
+    siblings = []
+    for sib in sorted(obj_dir.parent.glob("02_*")):
+        if not sib.is_dir() or sib.resolve() == obj_dir.resolve():
+            continue
+        sm = sib / "1_visual_hull_meta.json"
+        if sm.exists():
+            try:
+                sl = json.load(open(sm)).get("label", "").strip()
+            except Exception:
+                sl = ""
+            if sl:
+                siblings.append(sl)
+
     diag = obj_dir / "diagnostics" / "2_sam_wide"
     images = []
     for tag in PROMPT_DERIVE_VIEWS:
@@ -407,6 +425,13 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"supports.\n"
         f"   - If supports are clearly visible: name them.\n"
         f"   - If supports are hidden by a skirt: skip.\n\n"
+        f"LAMPS (MANDATORY) — if you see a lamp anywhere (a table lamp or "
+        f"floor lamp ON the target, or the target itself is a lamp), you "
+        f"MUST list the 'lamp shade' as its OWN separate pipe-union term, "
+        f"in addition to the lamp base/body. SAM3 under-segments lamp "
+        f"shades — it locks onto the opaque base and drops the thin, "
+        f"translucent shade — so the shade needs its own dedicated "
+        f"prompt or it gets carved away.\n\n"
         f"After EACH term in the pipe-union, append a class tag in curly "
         f"braces: '{{soft}}' or '{{hard}}'.\n"
         f"  - {{soft}} = upholstered/fabric/diffuse-edge material\n"
@@ -425,6 +450,13 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"the cabinet would NOT be included.\n\n"
         f"Output ONLY the pipe-union string with tags. No commentary, no "
         f"markdown, no quotes, no JSON, no explanation."})
+    if siblings:
+        content.append({"type": "text", "text":
+            "\nALREADY EXTRACTED SEPARATELY — each of these objects gets "
+            "its own extraction elsewhere in the pipeline. If any of them "
+            "is sitting on the target, do NOT list it as a sub-item; it is "
+            "handled on its own. Only list sub-items that are NOT in this "
+            "list:\n  " + "; ".join(sorted(set(siblings)))})
     r = client.chat.completions.create(
         model=QWEN_MODEL,
         messages=[{"role": "user", "content": content}],
@@ -444,6 +476,28 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         if "|" in line or line:
             prompt = line
             break
+
+    # Post-filter: drop any sub-item term whose head noun names a sibling
+    # object that is already extracted on its own. Belt-and-suspenders for
+    # when Qwen lists one anyway. Support pieces (legs/base/frame/etc.) are
+    # exempt — they are the parent's own structure, never a sibling object.
+    def _head(term):
+        toks = term.split("{")[0].strip().lower().split()
+        return toks[-1].rstrip("s") if toks else ""
+    SUPPORT_HEADS = {"leg", "base", "frame", "pedestal", "dowel", "spindle",
+                     "caster", "plinth", "skirt", "apron", "foot", "feet",
+                     "top"}
+    sib_heads = {_head(s) for s in siblings} - {""} - SUPPORT_HEADS
+    terms = [t.strip() for t in prompt.split("|") if t.strip()]
+    if len(terms) > 1 and sib_heads:
+        kept = [terms[0]]
+        for t in terms[1:]:
+            if _head(t) in sib_heads:
+                print(f"[step2] drop sub-item '{t}' — already extracted "
+                      f"separately as its own object")
+            else:
+                kept.append(t)
+        prompt = "|".join(kept)
 
     out_path = diag / "sam_prompt.txt"
     out_path.write_text(prompt + "\n")

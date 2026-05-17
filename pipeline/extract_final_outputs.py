@@ -25,6 +25,7 @@ from pathlib import Path
 ITERATION_DIR = Path(__file__).resolve().parent
 
 OBJECT_STAGE_PREFERENCE = [
+    "6_inside_outside",        # Stage 6 — final inside/outside refinement
     "5_subtracted",
     "5_bookshelf_sweep",
     "4_rug",

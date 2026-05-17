@@ -84,7 +84,12 @@ SAM_PAD_FABRIC_M = 0.10     # wider: upholstery, pillows, blankets — soft edge
 # neighboring furniture / wall / decor outside the bbox.
 QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
 QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
-CROP_TOP_PAD_PCT = 0.12      # extra upward pad on y_min (catch plant on top)
+CROP_TOP_PAD_PCT = 0.12      # fallback upward pad on y_min (catch plant on top)
+CROP_TOP_PAD_M = 1.5         # world-space upward headroom on the crop. Qwen's
+                             # per-view bbox under-boxes tall on-top items
+                             # (lamps, vases), so the crop clipped the lamp
+                             # shade off the top. 1.5 m converted to pixels
+                             # per view keeps tall items fully in frame.
 CROP_SIDE_PAD_PCT = 0.03     # left / right / bottom pad (small, just slack)
 
 # Table-like parents have widely-splayed legs + a top surface that holds
@@ -164,17 +169,24 @@ def qwen_view_bbox(img_path: Path, label: str):
 
 
 def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
-                  out_path: Path):
+                  out_path: Path, top_extra_px: float | None = None):
     """Crop `img_path` to bbox + asymmetric pads, save to `out_path`.
     Returns (crop_x0, crop_y0, crop_w, crop_h) so masks can be mapped
-    back to full image coords."""
+    back to full image coords.
+
+    top_extra_px: explicit upward headroom in pixels (caller converts
+    CROP_TOP_PAD_M world-metres → pixels via focal length / depth). If
+    None, falls back to the bbox-relative CROP_TOP_PAD_PCT."""
     x0, y0, x1, y1 = bbox_norm
     x0 = int(x0 * W_img / 1000)
     y0 = int(y0 * H_img / 1000)
     x1 = int(x1 * W_img / 1000)
     y1 = int(y1 * H_img / 1000)
     bw, bh = max(1, x1 - x0), max(1, y1 - y0)
-    top_extra = int(bh * CROP_TOP_PAD_PCT)
+    if top_extra_px is not None:
+        top_extra = int(top_extra_px)
+    else:
+        top_extra = int(bh * CROP_TOP_PAD_PCT)
     side_pad = int(max(bw, bh) * CROP_SIDE_PAD_PCT)
     cx0 = max(0, x0 - side_pad)
     cy0 = max(0, y0 - top_extra - side_pad)
@@ -185,7 +197,8 @@ def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
     return cx0, cy0, cw, ch
 MIN_VIEWS_FRAC = 0.7        # was 0.8 — too strict, killed bodies
 
-def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None):
+def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
+                    low_rings: bool = True):
     """Render the 25 SAM views from in_ply into diag/input_<tag>.png +
     save cameras.json. Mirrors sam_carve.step1_render_views but takes
     an input PLY argument. If scene_dir is provided, applies the same
@@ -221,8 +234,18 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None):
     # corner-adjacent object.
     sam_tight_yaws = list(YAWS_DEG) + [355.0, 5.0]
 
+    # Extend PITCHES_DEG with two LOW rings (0deg level, +15deg looking up)
+    # so SAM also sees UNDERNEATH the object. The above-only cameras
+    # (-15/-45) let under-object floor smear project inside the silhouette
+    # and survive the vote; the low rings silhouette it against the
+    # background so vote_carve cuts it. Camera set only — per-prompt SAM
+    # padding (sam_each_view / prompt_pads) is unchanged.
+    # EXEMPT: tables (flat top on legs) — low/up cameras look UNDER the
+    # tabletop and give SAM a garbage silhouette that carves the top away.
+    sam_tight_pitches = list(PITCHES_DEG) + ([0.0, 15.0] if low_rings else [])
+
     cameras = []
-    for pitch_deg in PITCHES_DEG:
+    for pitch_deg in sam_tight_pitches:
         ptag = f"p{int(round(pitch_deg))}"
         for yaw_deg in sam_tight_yaws:
             ytag = f"y{int(round(yaw_deg))}"
@@ -263,7 +286,7 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None):
         "fov": FOV, "width": W, "height": H,
         "y_down": Y_DOWN,
         "yaws_deg": YAWS_DEG,
-        "pitches_deg": PITCHES_DEG,
+        "pitches_deg": sam_tight_pitches,
         "topdown_pitch_deg": TOPDOWN_PITCH,
         "center": center.tolist(),
         "extent": extent,
@@ -319,8 +342,12 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
                 print(f"  [{tag}] Qwen didn't find '{parent_label}' — skip")
                 continue
             crop_path = diag / f"crop_{tag}.png"
+            # Convert CROP_TOP_PAD_M world-metres → pixels at this view's
+            # depth so the crop never clips tall on-top items (lamps).
+            top_extra_px = CROP_TOP_PAD_M * f_px / max(depth, 0.1)
             crop_x0, crop_y0, crop_w, crop_h = crop_for_sam(
-                img_path, bbox_norm, W_img, H_img, crop_path)
+                img_path, bbox_norm, W_img, H_img, crop_path,
+                top_extra_px=top_extra_px)
             sam_input_path = crop_path
         elif skip_crop:
             print(f"  [{tag}] no-crop (parent='{parent_label}' matches table-like token)")
@@ -454,9 +481,14 @@ def main():
     diag = obj / "diagnostics" / "4_sam_tight"
     diag.mkdir(parents=True, exist_ok=True)
 
-    # Step A: render 25 views from floor_drop.ply
-    print(f"\n[A] rendering 25 views from floor_drop.ply...")
-    render_25_views(in_ply, diag, scene_dir=scene)
+    # Step A: render 25 views from floor_drop.ply.
+    # Tables / desks are exempt from the low camera rings — the low/up
+    # views look under the flat top and wreck the SAM silhouette.
+    is_table = any(k in pipe_prompt.lower() for k in ("table", "desk"))
+    if is_table:
+        print("[sam_tight] table/desk detected — skipping low camera rings")
+    print(f"\n[A] rendering views from floor_drop.ply...")
+    render_25_views(in_ply, diag, scene_dir=scene, low_rings=not is_table)
 
     # Step B: SAM each view (per-prompt pad). Pass the main prompt
     # (first pipe-union term) as parent_label so SAM only sees the
