@@ -220,6 +220,26 @@ def step1_render_views(scene_dir: Path, obj_dir: Path):
     p5  = np.percentile(means, 5,  axis=0)
     p95 = np.percentile(means, 95, axis=0)
     extent = float((p95 - p5).max())
+
+    # FLOOR LAMPS ONLY — a floor lamp is tall + thin, and its hull picks up
+    # floor-level contamination (scan-rig boxes, plant bases, smear). That
+    # low junk drags the median DOWN, so the camera targets a low point and
+    # the lamp's pole + shade extend past the TOP of the frame (clipped).
+    # For floor lamps, target the robust p5/p95 bbox midpoint instead so the
+    # lamp is vertically centered. All other object types keep the median
+    # (which the comment above relies on for outlier resistance).
+    obj_label = ""
+    _meta = obj_dir / "1_visual_hull_meta.json"
+    if _meta.exists():
+        try:
+            obj_label = str(json.load(open(_meta)).get("label", "")).lower()
+        except Exception:
+            pass
+    if "floor" in obj_label and "lamp" in obj_label:
+        center = ((p5 + p95) / 2).astype(np.float32)
+        print(f"[frame] floor lamp '{obj_label}' — bbox-midpoint center "
+              f"(vertical centering, not median)")
+
     tan_half = math.tan(math.radians(FOV) / 2)
     distance = (extent * RENDER_MARGIN) / (2 * tan_half)
     print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
