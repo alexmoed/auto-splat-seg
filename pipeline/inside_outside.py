@@ -209,7 +209,8 @@ def main():
     if in_ply is None:
         # same final-PLY priority as extract_final_outputs (minus stage 6)
         for cand in ("5_subtracted.ply", "5_bookshelf_sweep.ply", "4_rug.ply",
-                     "5_sweep_fallback.ply", "4_sam_tight.ply"):
+                     "5_sweep_fallback.ply", "4b_sam_tight_low.ply",
+                     "4_sam_tight.ply"):
             if (obj / cand).exists():
                 in_ply = obj / cand
                 break
@@ -249,33 +250,44 @@ def main():
         print(f"[done] {out_ply} (passthrough — exempt)")
         return
 
-    mask_dir = (args.mask_dir or (obj / "diagnostics" / "4_sam_tight")).resolve()
-    cam_json = mask_dir / "cameras.json"
-    if not cam_json.exists():
-        print(f"[inside_outside] SKIPPED — no sam_tight masks at {cam_json} "
+    # Pool masks from BOTH SAM passes — Pass A high cameras
+    # (diagnostics/4_sam_tight) and Pass B low cameras
+    # (diagnostics/4b_sam_tight_low). The low cameras silhouette
+    # under-object smear from below; pooling both gives the insideness
+    # test full angular coverage. An explicit --mask-dir overrides.
+    if args.mask_dir:
+        mask_dirs = [args.mask_dir.resolve()]
+    else:
+        mask_dirs = [d for d in (obj / "diagnostics" / "4_sam_tight",
+                                 obj / "diagnostics" / "4b_sam_tight_low")
+                     if (d / "cameras.json").exists()]
+    if not mask_dirs:
+        print(f"[inside_outside] SKIPPED — no sam mask dirs under {obj} "
               f"(object didn't go through sam_tight); nothing to refine.")
         return
 
     print(f"[inside_outside] input PLY : {in_ply}")
-    print(f"[inside_outside] mask dir  : {mask_dir}")
+    print(f"[inside_outside] mask dirs : {[d.name for d in mask_dirs]}")
 
-    # --- load tight masks (raw, un-padded) ---
-    cams = json.load(open(cam_json))["cameras"]
+    # --- load tight masks (raw, un-padded) from all pooled dirs ---
     masks = []
     n_skip = 0
-    for cm in cams:
-        mp = mask_dir / f"mask_{cm['tag']}.png"
-        if not mp.exists():
-            continue
-        m = np.asarray(Image.open(mp).convert("L")) > 127
-        if int(m.sum()) < MIN_MASK_PX:
-            n_skip += 1
-            continue
-        masks.append((np.asarray(cm["V"], np.float64),
-                      np.asarray(cm["K"], np.float64), m))
+    for md in mask_dirs:
+        cams = json.load(open(md / "cameras.json"))["cameras"]
+        for cm in cams:
+            mp = md / f"mask_{cm['tag']}.png"
+            if not mp.exists():
+                continue
+            m = np.asarray(Image.open(mp).convert("L")) > 127
+            if int(m.sum()) < MIN_MASK_PX:
+                n_skip += 1
+                continue
+            masks.append((np.asarray(cm["V"], np.float64),
+                          np.asarray(cm["K"], np.float64), m))
     if not masks:
         sys.exit("[fatal] no usable tight masks")
-    print(f"[inside_outside] {len(masks)} tight masks ({n_skip} empty skipped)")
+    print(f"[inside_outside] {len(masks)} tight masks pooled from "
+          f"{len(mask_dirs)} pass(es) ({n_skip} empty skipped)")
 
     # --- per-splat insideness (computed once) ---
     pd = PlyData.read(str(in_ply))
@@ -341,7 +353,7 @@ def main():
     (diag / "report.json").write_text(json.dumps({
         "stage": "inside_outside",
         "input_ply": str(in_ply),
-        "mask_dir": str(mask_dir),
+        "mask_dirs": [str(d) for d in mask_dirs],
         "n_masks_used": len(masks),
         "threshold": thresh,
         "auto": bool(args.auto),

@@ -198,12 +198,18 @@ def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
 MIN_VIEWS_FRAC = 0.7        # was 0.8 — too strict, killed bodies
 
 def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
-                    low_rings: bool = True):
-    """Render the 25 SAM views from in_ply into diag/input_<tag>.png +
+                    pitches: list = None):
+    """Render the SAM views from in_ply into diag/input_<tag>.png +
     save cameras.json. Mirrors sam_carve.step1_render_views but takes
     an input PLY argument. If scene_dir is provided, applies the same
     wall-side camera skip as sam_carve step 1 (skip cameras whose eye
-    sits on the wall-side of the hull's back face)."""
+    sits on the wall-side of the hull's back face).
+
+    `pitches` selects the pitch ring set:
+      - None / PITCHES_DEG  → Pass A high cameras (-15/-45) + topdown.
+      - [0.0, 15.0]         → Pass B low cameras (level / looking up).
+    The two passes are run separately (sam_tight = A, sam_low_refine = B)
+    so the low cameras never enter Pass A's vote-carve."""
     diag.mkdir(parents=True, exist_ok=True)
     for f in diag.glob("input_*.png"):
         f.unlink()
@@ -234,15 +240,12 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
     # corner-adjacent object.
     sam_tight_yaws = list(YAWS_DEG) + [355.0, 5.0]
 
-    # Extend PITCHES_DEG with two LOW rings (0deg level, +15deg looking up)
-    # so SAM also sees UNDERNEATH the object. The above-only cameras
-    # (-15/-45) let under-object floor smear project inside the silhouette
-    # and survive the vote; the low rings silhouette it against the
-    # background so vote_carve cuts it. Camera set only — per-prompt SAM
-    # padding (sam_each_view / prompt_pads) is unchanged.
-    # EXEMPT: tables (flat top on legs) — low/up cameras look UNDER the
-    # tabletop and give SAM a garbage silhouette that carves the top away.
-    sam_tight_pitches = list(PITCHES_DEG) + ([0.0, 15.0] if low_rings else [])
+    # Pitch set is caller-selected (Pass A high vs Pass B low). Pass A is
+    # the -15/-45 above-object rings; Pass B (sam_low_refine.py) supplies
+    # [0, 15] low rings separately. The topdown camera is only added for
+    # the high pass (Pass A) — a topdown is meaningless for the low pass.
+    sam_tight_pitches = list(pitches) if pitches is not None else list(PITCHES_DEG)
+    is_low_pass = pitches is not None and all(p >= 0 for p in pitches)
 
     cameras = []
     for pitch_deg in sam_tight_pitches:
@@ -267,18 +270,19 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
                 "eye": eye.tolist(), "target": center.tolist(),
                 "png": str(out_png),
             })
-    V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
-                              FOV, W, H, y_down=Y_DOWN)
-    img = render_splat(scene, V, K, W, H, bg=(1.0, 1.0, 1.0))
-    out_png = diag / "input_topdown.png"
-    Image.fromarray(img).save(out_png)
-    cameras.append({
-        "tag": "topdown", "yaw_deg": 0.0, "pitch_deg": TOPDOWN_PITCH,
-        "fov": FOV, "width": W, "height": H,
-        "V": V.tolist(), "K": K.tolist(),
-        "eye": eye.tolist(), "target": center.tolist(),
-        "png": str(out_png),
-    })
+    if not is_low_pass:
+        V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
+                                  FOV, W, H, y_down=Y_DOWN)
+        img = render_splat(scene, V, K, W, H, bg=(1.0, 1.0, 1.0))
+        out_png = diag / "input_topdown.png"
+        Image.fromarray(img).save(out_png)
+        cameras.append({
+            "tag": "topdown", "yaw_deg": 0.0, "pitch_deg": TOPDOWN_PITCH,
+            "fov": FOV, "width": W, "height": H,
+            "V": V.tolist(), "K": K.tolist(),
+            "eye": eye.tolist(), "target": center.tolist(),
+            "png": str(out_png),
+        })
     cam_json = diag / "cameras.json"
     cam_json.write_text(json.dumps({
         "ply_path": str(in_ply),
@@ -481,14 +485,11 @@ def main():
     diag = obj / "diagnostics" / "4_sam_tight"
     diag.mkdir(parents=True, exist_ok=True)
 
-    # Step A: render 25 views from floor_drop.ply.
-    # Tables / desks are exempt from the low camera rings — the low/up
-    # views look under the flat top and wreck the SAM silhouette.
-    is_table = any(k in pipe_prompt.lower() for k in ("table", "desk"))
-    if is_table:
-        print("[sam_tight] table/desk detected — skipping low camera rings")
-    print(f"\n[A] rendering views from floor_drop.ply...")
-    render_25_views(in_ply, diag, scene_dir=scene, low_rings=not is_table)
+    # Step A: render the high-camera views (-15/-45 rings) from
+    # floor_drop.ply. The low rings (0/+15) are a SEPARATE pass —
+    # sam_low_refine.py — so they never enter this vote-carve.
+    print(f"\n[A] rendering high-camera views from floor_drop.ply...")
+    render_25_views(in_ply, diag, scene_dir=scene)
 
     # Step B: SAM each view (per-prompt pad). Pass the main prompt
     # (first pipe-union term) as parent_label so SAM only sees the

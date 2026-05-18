@@ -71,6 +71,17 @@ STAGE_SAM_TIGHT_FROM_FLOOR = (
                   str(s), str(o)],
     "4_sam_tight.ply",
 )
+# Pass B — low-camera SAM refine. Reruns SAM on 4_sam_tight.ply from the
+# 0/+15 low cameras and re-carves. Chained off Pass A so the low cameras
+# only ever carve an already-tight object. Tables are exempt inside the
+# script (low cameras look under a flat top). Always produces
+# 4b_sam_tight_low.ply (a copy of 4_sam_tight.ply when skipped).
+STAGE_SAM_LOW_REFINE = (
+    "sam_low_refine",
+    lambda s, o: [sys.executable, str(ITERATION_DIR / "sam_low_refine.py"),
+                  str(s), str(o)],
+    "4b_sam_tight_low.ply",
+)
 # Bookshelf-specific sam_tight: looser vote (0.5 vs 0.7) + bigger pads
 # (hard 0.05/fabric 0.15) — defaults nuke the body of a bookshelf because
 # only the front-facing yaws have valid SAM masks. Validated 2026-05-05
@@ -137,6 +148,7 @@ GENERAL_PRE_QC_STAGES = [
     STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
     STAGE_FLOOR_DROP,
     STAGE_SAM_TIGHT_FROM_FLOOR,
+    STAGE_SAM_LOW_REFINE,
 ]
 
 
@@ -180,11 +192,13 @@ def _run_qc(scene: Path, obj_dir: Path, no_move: bool) -> tuple[str, int]:
 def _run_sweep_fallback(scene: Path, obj_dir: Path,
                           source_stage: str = "auto") -> int:
     """Run sweep_fallback.py. source_stage='auto' picks the latest
-    stage that exists: 4_sam_tight (preferred — refines the SAM result
-    with a Qwen-bbox vote that drops off-axis neighbours SAM kept),
-    else 3_floor_drop (recovery — sam_tight failed)."""
+    stage that exists: 4b_sam_tight_low (preferred — the low-camera
+    refine of the SAM result), else 4_sam_tight (high-camera SAM
+    result), else 3_floor_drop (recovery — sam_tight failed)."""
     if source_stage == "auto":
-        if (obj_dir / "4_sam_tight.ply").exists():
+        if (obj_dir / "4b_sam_tight_low.ply").exists():
+            source_stage = "4b_sam_tight_low"
+        elif (obj_dir / "4_sam_tight.ply").exists():
             source_stage = "4_sam_tight"
         else:
             source_stage = "3_floor_drop"

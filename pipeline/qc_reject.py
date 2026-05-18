@@ -56,6 +56,7 @@ STAGE_PREFERENCE = [
     "5_subtracted",
     "5_bookshelf_sweep",
     "4_rug",
+    "4b_sam_tight_low",        # Pass B — low-camera SAM refine of 4_sam_tight
     "4_sam_tight",
     "5_sweep_fallback",
     "3_floor_drop",
