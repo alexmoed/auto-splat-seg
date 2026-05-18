@@ -33,7 +33,7 @@ from plyfile import PlyData, PlyElement
 
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
 W, H = 3840, 2160
-FOV = 70.0
+FOV = 80.0          # wider angle — fits more of each quadrant in frame
 BACK = 2.0
 
 
@@ -52,7 +52,7 @@ def main():
     zb_min, zb_max = float(np.percentile(zs, 15)), float(np.percentile(zs, 85))
     cx, cz = (xb_min + xb_max) / 2, (zb_min + zb_max) / 2
     cy = float(ys.mean())
-    eye_y = cy - 1.0
+    eye_y = cy - 0.5    # camera ~eye level — lower than the old 1.0m lift
 
     print(f"x [{xb_min:.2f},{xb_max:.2f}]  z [{zb_min:.2f},{zb_max:.2f}]"
           f"  eye_y={eye_y:.2f}  back={BACK}m")
