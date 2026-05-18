@@ -163,7 +163,11 @@ def main():
         f"  - object_visible: true/false (can you see ANY coherent "
         f"object across the 5 views — even if it's the wrong class?)\n"
         f"  - matches_label: true/false (does what you see plausibly "
-        f"match the label '{label}'?)\n\n"
+        f"match the label '{label}'?)\n"
+        f"  - corrected_label: if object_visible is true but the object "
+        f"is NOT a '{label}' (a coherent object of a different class), "
+        f"give the correct short label for what you actually see "
+        f"(e.g. 'kitchen island', 'ottoman', 'bench'). Otherwise null.\n\n"
         f"Output ONLY the JSON object. No prose, no markdown fences."})
     r = client.chat.completions.create(
         model=QWEN_MODEL,
@@ -181,20 +185,54 @@ def main():
     reason = parsed.get("reason", "")
     object_visible = parsed.get("object_visible", None)
     matches_label = parsed.get("matches_label", None)
+    corrected_label = parsed.get("corrected_label", None)
+    if isinstance(corrected_label, str):
+        corrected_label = corrected_label.strip() or None
+    else:
+        corrected_label = None
+
+    # RENAME-BEFORE-REJECT: a coherent object that is simply mislabeled
+    # (object_visible true, but the wrong class) should be relabeled and
+    # KEPT, not rejected. Only genuine noise/empty (object_visible false)
+    # is a true reject. Qwen supplies the corrected label.
+    renamed = False
+    if (verdict == "REJECT" and object_visible and corrected_label
+            and corrected_label.lower() != str(label).lower()):
+        for jf in ("1_visual_hull_meta.json", "info.json"):
+            p = obj / jf
+            if not p.exists():
+                continue
+            try:
+                d = json.load(open(p))
+                d["original_label"] = d.get("label")
+                d["label"] = corrected_label
+                if "category" in d:
+                    d["original_category"] = d.get("category")
+                    d["category"] = corrected_label
+                p.write_text(json.dumps(d, indent=2))
+            except Exception:
+                pass
+        renamed = True
+        print(f"[qc_reject] RENAME-BEFORE-REJECT — coherent object, wrong "
+              f"label '{label}' -> '{corrected_label}'; keeping, not rejecting")
+        verdict = "PASS"
 
     out = {
         "stage_inspected": stage,
-        "label": label,
+        "label": corrected_label if renamed else label,
         "verdict": verdict,
         "reason": reason,
         "object_visible": object_visible,
         "matches_label": matches_label,
+        "corrected_label": corrected_label,
+        "renamed": renamed,
+        "original_label": label if renamed else None,
         "qwen_raw": raw,
     }
     (obj / "qc_reject.json").write_text(json.dumps(out, indent=2))
 
     print(f"\n[qc_reject] verdict={verdict}  visible={object_visible}  "
-          f"matches_label={matches_label}")
+          f"matches_label={matches_label}  renamed={renamed}")
     print(f"[qc_reject] reason: {reason}")
 
     if verdict == "REJECT" and not args.no_move:
