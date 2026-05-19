@@ -84,12 +84,7 @@ SAM_PAD_FABRIC_M = 0.10     # wider: upholstery, pillows, blankets — soft edge
 # neighboring furniture / wall / decor outside the bbox.
 QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
 QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
-CROP_TOP_PAD_PCT = 0.12      # fallback upward pad on y_min (catch plant on top)
-CROP_TOP_PAD_M = 1.5         # world-space upward headroom on the crop. Qwen's
-                             # per-view bbox under-boxes tall on-top items
-                             # (lamps, vases), so the crop clipped the lamp
-                             # shade off the top. 1.5 m converted to pixels
-                             # per view keeps tall items fully in frame.
+CROP_TOP_PAD_PCT = 0.12      # extra upward pad on y_min (catch plant on top)
 CROP_SIDE_PAD_PCT = 0.03     # left / right / bottom pad (small, just slack)
 
 # Table-like parents have widely-splayed legs + a top surface that holds
@@ -169,24 +164,17 @@ def qwen_view_bbox(img_path: Path, label: str):
 
 
 def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
-                  out_path: Path, top_extra_px: float | None = None):
+                  out_path: Path):
     """Crop `img_path` to bbox + asymmetric pads, save to `out_path`.
     Returns (crop_x0, crop_y0, crop_w, crop_h) so masks can be mapped
-    back to full image coords.
-
-    top_extra_px: explicit upward headroom in pixels (caller converts
-    CROP_TOP_PAD_M world-metres → pixels via focal length / depth). If
-    None, falls back to the bbox-relative CROP_TOP_PAD_PCT."""
+    back to full image coords."""
     x0, y0, x1, y1 = bbox_norm
     x0 = int(x0 * W_img / 1000)
     y0 = int(y0 * H_img / 1000)
     x1 = int(x1 * W_img / 1000)
     y1 = int(y1 * H_img / 1000)
     bw, bh = max(1, x1 - x0), max(1, y1 - y0)
-    if top_extra_px is not None:
-        top_extra = int(top_extra_px)
-    else:
-        top_extra = int(bh * CROP_TOP_PAD_PCT)
+    top_extra = int(bh * CROP_TOP_PAD_PCT)
     side_pad = int(max(bw, bh) * CROP_SIDE_PAD_PCT)
     cx0 = max(0, x0 - side_pad)
     cy0 = max(0, y0 - top_extra - side_pad)
@@ -197,19 +185,12 @@ def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
     return cx0, cy0, cw, ch
 MIN_VIEWS_FRAC = 0.7        # was 0.8 — too strict, killed bodies
 
-def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
-                    pitches: list = None):
-    """Render the SAM views from in_ply into diag/input_<tag>.png +
+def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None):
+    """Render the 25 SAM views from in_ply into diag/input_<tag>.png +
     save cameras.json. Mirrors sam_carve.step1_render_views but takes
     an input PLY argument. If scene_dir is provided, applies the same
     wall-side camera skip as sam_carve step 1 (skip cameras whose eye
-    sits on the wall-side of the hull's back face).
-
-    `pitches` selects the pitch ring set:
-      - None / PITCHES_DEG  → Pass A high cameras (-15/-45) + topdown.
-      - [0.0, 15.0]         → Pass B low cameras (level / looking up).
-    The two passes are run separately (sam_tight = A, sam_low_refine = B)
-    so the low cameras never enter Pass A's vote-carve."""
+    sits on the wall-side of the hull's back face)."""
     diag.mkdir(parents=True, exist_ok=True)
     for f in diag.glob("input_*.png"):
         f.unlink()
@@ -240,15 +221,8 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
     # corner-adjacent object.
     sam_tight_yaws = list(YAWS_DEG) + [355.0, 5.0]
 
-    # Pitch set is caller-selected (Pass A high vs Pass B low). Pass A is
-    # the -15/-45 above-object rings; Pass B (sam_low_refine.py) supplies
-    # [0, 15] low rings separately. The topdown camera is only added for
-    # the high pass (Pass A) — a topdown is meaningless for the low pass.
-    sam_tight_pitches = list(pitches) if pitches is not None else list(PITCHES_DEG)
-    is_low_pass = pitches is not None and all(p >= 0 for p in pitches)
-
     cameras = []
-    for pitch_deg in sam_tight_pitches:
+    for pitch_deg in PITCHES_DEG:
         ptag = f"p{int(round(pitch_deg))}"
         for yaw_deg in sam_tight_yaws:
             ytag = f"y{int(round(yaw_deg))}"
@@ -270,19 +244,18 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
                 "eye": eye.tolist(), "target": center.tolist(),
                 "png": str(out_png),
             })
-    if not is_low_pass:
-        V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
-                                  FOV, W, H, y_down=Y_DOWN)
-        img = render_splat(scene, V, K, W, H, bg=(1.0, 1.0, 1.0))
-        out_png = diag / "input_topdown.png"
-        Image.fromarray(img).save(out_png)
-        cameras.append({
-            "tag": "topdown", "yaw_deg": 0.0, "pitch_deg": TOPDOWN_PITCH,
-            "fov": FOV, "width": W, "height": H,
-            "V": V.tolist(), "K": K.tolist(),
-            "eye": eye.tolist(), "target": center.tolist(),
-            "png": str(out_png),
-        })
+    V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
+                              FOV, W, H, y_down=Y_DOWN)
+    img = render_splat(scene, V, K, W, H, bg=(1.0, 1.0, 1.0))
+    out_png = diag / "input_topdown.png"
+    Image.fromarray(img).save(out_png)
+    cameras.append({
+        "tag": "topdown", "yaw_deg": 0.0, "pitch_deg": TOPDOWN_PITCH,
+        "fov": FOV, "width": W, "height": H,
+        "V": V.tolist(), "K": K.tolist(),
+        "eye": eye.tolist(), "target": center.tolist(),
+        "png": str(out_png),
+    })
     cam_json = diag / "cameras.json"
     cam_json.write_text(json.dumps({
         "ply_path": str(in_ply),
@@ -290,7 +263,7 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
         "fov": FOV, "width": W, "height": H,
         "y_down": Y_DOWN,
         "yaws_deg": YAWS_DEG,
-        "pitches_deg": sam_tight_pitches,
+        "pitches_deg": PITCHES_DEG,
         "topdown_pitch_deg": TOPDOWN_PITCH,
         "center": center.tolist(),
         "extent": extent,
@@ -346,12 +319,8 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
                 print(f"  [{tag}] Qwen didn't find '{parent_label}' — skip")
                 continue
             crop_path = diag / f"crop_{tag}.png"
-            # Convert CROP_TOP_PAD_M world-metres → pixels at this view's
-            # depth so the crop never clips tall on-top items (lamps).
-            top_extra_px = CROP_TOP_PAD_M * f_px / max(depth, 0.1)
             crop_x0, crop_y0, crop_w, crop_h = crop_for_sam(
-                img_path, bbox_norm, W_img, H_img, crop_path,
-                top_extra_px=top_extra_px)
+                img_path, bbox_norm, W_img, H_img, crop_path)
             sam_input_path = crop_path
         elif skip_crop:
             print(f"  [{tag}] no-crop (parent='{parent_label}' matches table-like token)")
@@ -485,10 +454,8 @@ def main():
     diag = obj / "diagnostics" / "4_sam_tight"
     diag.mkdir(parents=True, exist_ok=True)
 
-    # Step A: render the high-camera views (-15/-45 rings) from
-    # floor_drop.ply. The low rings (0/+15) are a SEPARATE pass —
-    # sam_low_refine.py — so they never enter this vote-carve.
-    print(f"\n[A] rendering high-camera views from floor_drop.ply...")
+    # Step A: render 25 views from floor_drop.ply
+    print(f"\n[A] rendering 25 views from floor_drop.ply...")
     render_25_views(in_ply, diag, scene_dir=scene)
 
     # Step B: SAM each view (per-prompt pad). Pass the main prompt

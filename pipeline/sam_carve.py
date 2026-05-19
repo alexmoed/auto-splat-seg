@@ -220,26 +220,6 @@ def step1_render_views(scene_dir: Path, obj_dir: Path):
     p5  = np.percentile(means, 5,  axis=0)
     p95 = np.percentile(means, 95, axis=0)
     extent = float((p95 - p5).max())
-
-    # FLOOR LAMPS ONLY — a floor lamp is tall + thin, and its hull picks up
-    # floor-level contamination (scan-rig boxes, plant bases, smear). That
-    # low junk drags the median DOWN, so the camera targets a low point and
-    # the lamp's pole + shade extend past the TOP of the frame (clipped).
-    # For floor lamps, target the robust p5/p95 bbox midpoint instead so the
-    # lamp is vertically centered. All other object types keep the median
-    # (which the comment above relies on for outlier resistance).
-    obj_label = ""
-    _meta = obj_dir / "1_visual_hull_meta.json"
-    if _meta.exists():
-        try:
-            obj_label = str(json.load(open(_meta)).get("label", "")).lower()
-        except Exception:
-            pass
-    if "floor" in obj_label and "lamp" in obj_label:
-        center = ((p5 + p95) / 2).astype(np.float32)
-        print(f"[frame] floor lamp '{obj_label}' — bbox-midpoint center "
-              f"(vertical centering, not median)")
-
     tan_half = math.tan(math.radians(FOV) / 2)
     distance = (extent * RENDER_MARGIN) / (2 * tan_half)
     print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
@@ -363,24 +343,6 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
     meta = json.load(open(meta_path))
     label = meta.get("label", "object")
 
-    # Sibling objects that each get their OWN extraction. A sub-item that
-    # is one of these must not ride along in this parent's compound carve
-    # (it would be re-carved at parent scale and mangled — e.g. a lamp on
-    # a sideboard). Qwen is told to exclude them, and a post-filter drops
-    # any that slip through.
-    siblings = []
-    for sib in sorted(obj_dir.parent.glob("02_*")):
-        if not sib.is_dir() or sib.resolve() == obj_dir.resolve():
-            continue
-        sm = sib / "1_visual_hull_meta.json"
-        if sm.exists():
-            try:
-                sl = json.load(open(sm)).get("label", "").strip()
-            except Exception:
-                sl = ""
-            if sl:
-                siblings.append(sl)
-
     diag = obj_dir / "diagnostics" / "2_sam_wide"
     images = []
     for tag in PROMPT_DERIVE_VIEWS:
@@ -445,14 +407,6 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"supports.\n"
         f"   - If supports are clearly visible: name them.\n"
         f"   - If supports are hidden by a skirt: skip.\n\n"
-        f"LAMPS — ONLY when a lamp is sitting ON the target, or the "
-        f"target itself IS a lamp: list the 'lamp shade' as its OWN "
-        f"separate pipe-union term, in addition to the lamp base/body. "
-        f"SAM3 under-segments lamp shades — it locks onto the opaque base "
-        f"and drops the thin, translucent shade — so the shade needs its "
-        f"own dedicated prompt or it gets carved away. A lamp standing on "
-        f"a NEIGHBORING surface (a different table, the floor next to the "
-        f"target) is a neighbor — do NOT list it or its shade at all.\n\n"
         f"After EACH term in the pipe-union, append a class tag in curly "
         f"braces: '{{soft}}' or '{{hard}}'.\n"
         f"  - {{soft}} = upholstered/fabric/diffuse-edge material\n"
@@ -471,13 +425,6 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"the cabinet would NOT be included.\n\n"
         f"Output ONLY the pipe-union string with tags. No commentary, no "
         f"markdown, no quotes, no JSON, no explanation."})
-    if siblings:
-        content.append({"type": "text", "text":
-            "\nALREADY EXTRACTED SEPARATELY — each of these objects gets "
-            "its own extraction elsewhere in the pipeline. If any of them "
-            "is sitting on the target, do NOT list it as a sub-item; it is "
-            "handled on its own. Only list sub-items that are NOT in this "
-            "list:\n  " + "; ".join(sorted(set(siblings)))})
     r = client.chat.completions.create(
         model=QWEN_MODEL,
         messages=[{"role": "user", "content": content}],
@@ -497,28 +444,6 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         if "|" in line or line:
             prompt = line
             break
-
-    # Post-filter: drop any sub-item term whose head noun names a sibling
-    # object that is already extracted on its own. Belt-and-suspenders for
-    # when Qwen lists one anyway. Support pieces (legs/base/frame/etc.) are
-    # exempt — they are the parent's own structure, never a sibling object.
-    def _head(term):
-        toks = term.split("{")[0].strip().lower().split()
-        return toks[-1].rstrip("s") if toks else ""
-    SUPPORT_HEADS = {"leg", "base", "frame", "pedestal", "dowel", "spindle",
-                     "caster", "plinth", "skirt", "apron", "foot", "feet",
-                     "top"}
-    sib_heads = {_head(s) for s in siblings} - {""} - SUPPORT_HEADS
-    terms = [t.strip() for t in prompt.split("|") if t.strip()]
-    if len(terms) > 1 and sib_heads:
-        kept = [terms[0]]
-        for t in terms[1:]:
-            if _head(t) in sib_heads:
-                print(f"[step2] drop sub-item '{t}' — already extracted "
-                      f"separately as its own object")
-            else:
-                kept.append(t)
-        prompt = "|".join(kept)
 
     out_path = diag / "sam_prompt.txt"
     out_path.write_text(prompt + "\n")

@@ -198,11 +198,7 @@ def main():
     ap.add_argument("--vote-frac", type=float, default=VOTE_FRAC)
     ap.add_argument("--bbox-pad-pct", type=float, default=BBOX_PAD_PCT)
     ap.add_argument("--source-stage", default="3_floor_drop",
-                    help="which earlier stage to source from. The "
-                         "dispatcher passes this explicitly (prefers "
-                         "4b_sam_tight_low, falls back to 4_sam_tight, "
-                         "then 3_floor_drop). Default 3_floor_drop is the "
-                         "always-safe recovery source.")
+                    help="which earlier stage to source from (default 3_floor_drop)")
     args = ap.parse_args()
 
     obj = args.obj_dir.resolve()
