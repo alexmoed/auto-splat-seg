@@ -190,11 +190,21 @@ def _run_qc(scene: Path, obj_dir: Path, no_move: bool) -> tuple[str, int]:
 
 
 def _run_sweep_fallback(scene: Path, obj_dir: Path,
-                          source_stage: str = "4b_sam_tight_low") -> int:
-    """Run sweep_fallback.py. Defaults to sourcing from 4b_sam_tight_low
-    — the Pass B low-camera refine, which the chain ALWAYS produces (a
-    copy of 4_sam_tight.ply when Pass B is skipped). The QC-reject
-    recovery path passes source_stage='3_floor_drop' instead."""
+                          source_stage: str = "auto") -> int:
+    """Run sweep_fallback.py. source_stage='auto' PREFERS 4b_sam_tight_low
+    (Pass B low-camera refine), then 4_sam_tight, then 3_floor_drop.
+    The fallback chain matters: sweep_fallback is the safety net for when
+    the SAM chain FAILED — in that case neither 4b nor 4_sam_tight exists,
+    and 3_floor_drop is the only recovery source. Hard-pinning 4b breaks
+    exactly the case sweep_fallback exists for. The QC-reject recovery
+    path passes source_stage='3_floor_drop' explicitly."""
+    if source_stage == "auto":
+        if (obj_dir / "4b_sam_tight_low.ply").exists():
+            source_stage = "4b_sam_tight_low"
+        elif (obj_dir / "4_sam_tight.ply").exists():
+            source_stage = "4_sam_tight"
+        else:
+            source_stage = "3_floor_drop"
     return subprocess.run([sys.executable, str(ITERATION_DIR / "sweep_fallback.py"),
                            str(scene), str(obj_dir),
                            "--source-stage", source_stage]).returncode
