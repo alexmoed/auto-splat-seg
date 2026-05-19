@@ -397,7 +397,18 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"refer to the SAME physical object — don't substitute a neighbor.\n\n"
         f"2. SUB-ITEMS — items resting ON / draped OVER / attached TO the "
         f"target only. Pillows, throws, blankets, cushions, books, decor "
-        f"sitting on the target's top surface. If nothing on top, skip.\n\n"
+        f"sitting on the target's top surface. If nothing on top, skip.\n"
+        f"   IMPORTANT — break each COMPOUND sub-item into its visible "
+        f"PARTS, each as its OWN pipe-union term, so SAM keeps all of it, "
+        f"not just one part. Examples of decomposing:\n"
+        f"     - a table lamp -> 'table lamp' AND 'lamp shade' AND "
+        f"'lamp base' (list all, not just 'lamp')\n"
+        f"     - a potted plant -> 'potted plant' AND 'flowers' / "
+        f"'dried grass' AND 'flower pot' / 'vase' / 'planter'\n"
+        f"     - a framed photo -> 'picture frame' AND 'photograph'\n"
+        f"   When unsure how an item decomposes, list the whole item AND "
+        f"every part you can name — more terms is safer, SAM picks the "
+        f"ones that match. Never collapse a multi-part item to one term.\n\n"
         f"3. SUPPORTS (MANDATORY if visible) — the target's OWN structural "
         f"pieces: its legs, base, frame, pedestal, dowels, spindles, "
         f"casters, plinth. Not legs of a neighboring table. Name them as "
@@ -416,6 +427,7 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f'- target=beige armchair: beige armchair {{soft}}|striped pillow {{soft}}|brown throw blanket {{soft}}|wooden chair legs {{hard}}\n'
         f'- target=wooden coffee table: wooden coffee table top {{hard}}|thin wooden table legs {{hard}}\n'
         f'- target=green sofa: green sofa {{soft}}|orange pillow {{soft}}|gray throw {{soft}}\n'
+        f'- target=wooden sideboard with a lamp + plant on top: wooden sideboard {{hard}}|table lamp {{hard}}|lamp shade {{soft}}|lamp base {{hard}}|potted plant {{hard}}|flower pot {{hard}}|picture frame {{hard}}|wooden sideboard legs {{hard}}\n'
         f'- target=wooden tv stand: wooden tv stand {{hard}}|wooden tv stand legs {{hard}}\n\n'
         f"In the last example, even if a TV and speakers are visible ON "
         f"the cabinet, they would only be included if you judge they are "

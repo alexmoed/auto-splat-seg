@@ -83,7 +83,10 @@ SAM_PAD_FABRIC_M = 0.10     # wider: upholstery, pillows, blankets — soft edge
 # neighboring furniture / wall / decor outside the bbox.
 QWEN_URL = "http://127.0.0.1:8000/v1"
 QWEN_MODEL = "qwen36-awq"
-CROP_TOP_PAD_PCT = 0.12      # extra upward pad on y_min (catch plant on top)
+CROP_TOP_PAD_PCT = 0.12      # fallback upward pad on y_min (catch plant on top)
+CROP_TOP_PAD_M = 2.0         # world-space upward headroom — crop top clamps to
+                             # the image edge so tall on-top items (lamp) are
+                             # never clipped out of the crop before SAM sees them
 CROP_SIDE_PAD_PCT = 0.03     # left / right / bottom pad (small, just slack)
 
 
@@ -104,9 +107,14 @@ def qwen_view_bbox(img_path: Path, label: str):
     prompt = (
         f"This is a single view of a single piece of furniture and its "
         f"surroundings.\n\n"
-        f"TASK: return a TIGHT bounding box around THE {label.upper()} "
-        f"plus items RESTING ON or INSIDE it. Exclude neighboring "
-        f"furniture, walls, paintings, and floor items.\n\n"
+        f"TASK: return a bounding box that contains THE {label.upper()} "
+        f"AND EVERYTHING resting ON TOP OF it or inside it — lamps and "
+        f"lamp shades, vases, plants, bowls, books, picture frames: every "
+        f"object sitting on it. The box's TOP edge MUST be ABOVE the "
+        f"highest point of the tallest item on top — do NOT draw the box "
+        f"tight to the furniture, it must enclose the whole stack. "
+        f"Exclude ONLY neighboring furniture, walls, paintings on the "
+        f"wall, and items on the floor.\n\n"
         f"If the {label} is not visible in this view, return "
         f'{{"found": false}}.\n\n'
         f'Otherwise return: {{"found": true, "bbox_2d": [x0, y0, x1, y1]}}\n'
@@ -146,17 +154,22 @@ def qwen_view_bbox(img_path: Path, label: str):
 
 
 def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
-                  out_path: Path):
+                  out_path: Path, top_extra_px=None):
     """Crop `img_path` to bbox + asymmetric pads, save to `out_path`.
     Returns (crop_x0, crop_y0, crop_w, crop_h) so masks can be mapped
-    back to full image coords."""
+    back to full image coords.
+
+    top_extra_px: explicit upward headroom in pixels (caller converts
+    CROP_TOP_PAD_M world-metres -> pixels). If None, falls back to the
+    bbox-relative CROP_TOP_PAD_PCT."""
     x0, y0, x1, y1 = bbox_norm
     x0 = int(x0 * W_img / 1000)
     y0 = int(y0 * H_img / 1000)
     x1 = int(x1 * W_img / 1000)
     y1 = int(y1 * H_img / 1000)
     bw, bh = max(1, x1 - x0), max(1, y1 - y0)
-    top_extra = int(bh * CROP_TOP_PAD_PCT)
+    top_extra = (int(top_extra_px) if top_extra_px is not None
+                 else int(bh * CROP_TOP_PAD_PCT))
     side_pad = int(max(bw, bh) * CROP_SIDE_PAD_PCT)
     cx0 = max(0, x0 - side_pad)
     cy0 = max(0, y0 - top_extra - side_pad)
@@ -297,8 +310,10 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
                 print(f"  [{tag}] Qwen didn't find '{parent_label}' — skip")
                 continue
             crop_path = diag / f"crop_{tag}.png"
+            top_extra_px = CROP_TOP_PAD_M * f_px / max(depth, 0.1)
             crop_x0, crop_y0, crop_w, crop_h = crop_for_sam(
-                img_path, bbox_norm, W_img, H_img, crop_path)
+                img_path, bbox_norm, W_img, H_img, crop_path,
+                top_extra_px=top_extra_px)
             sam_input_path = crop_path
 
         # raw_union: unioned undilated mask (for diagnostics)
