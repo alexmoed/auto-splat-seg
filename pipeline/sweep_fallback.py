@@ -26,7 +26,6 @@ Writes:
     <obj>/renders/5_sweep_fallback/{y0,y90,y180,y270,topdown}.png
     <obj>/diagnostics/5_sweep_fallback/{input_*,overlay_*}.png + report.json
 """
-import os
 import argparse
 import base64
 import io
@@ -59,8 +58,8 @@ W, H = 1920, 1080
 RENDER_MARGIN = 2.0
 Y_DOWN = True
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 VOTE_FRAC = 0.6   # slightly looser than bookshelf (0.7) — fallback runs
                   # when sam_tight already failed; better to keep extra

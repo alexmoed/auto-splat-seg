@@ -36,7 +36,7 @@ from plyfile import PlyData, PlyElement
 
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
 
-# RENDER MARGIN — single source of truth across pipeline scripts.
+# RENDER MARGIN — single source of truth across iteration_1 scripts.
 # 1.6 → 2.0 → 3.5 (2026-05-03). Bumped because 2.0 still cut chair legs
 # at frame bottom — combined with the percentile-extent bug
 # (p5/p95 of a 1.26m chair gave only 0.73m, so distance was 75% of what

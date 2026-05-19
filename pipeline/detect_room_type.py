@@ -10,7 +10,6 @@ Usage:
 Prints the chosen room type to stdout. Writes JSON detail to
 <scene_dir>/_inventory_temp/room_type.json if a scene_dir is provided.
 """
-import os
 import argparse
 import base64
 import io
@@ -27,8 +26,8 @@ sys.path.insert(0, str(ITERATION_DIR))
 
 from room_config import VALID_ROOM_TYPES   # noqa: E402
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 
 def encode_b64(p: Path, max_dim: int = 1280) -> str:

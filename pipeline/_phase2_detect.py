@@ -19,7 +19,6 @@ And combined:
 Usage:
     python _phase2_detect.py <scene_dir>
 """
-import os
 import argparse
 import base64
 import io
@@ -31,8 +30,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from openai import OpenAI
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 QUADS = ["NE", "NW", "SE", "SW"]
 

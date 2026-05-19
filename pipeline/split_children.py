@@ -48,37 +48,6 @@ MIN_VIEW_HITS = 5  # need at least this many SAM-mask views before voting
 CHILD_SAM_PAD_HARD_M = 0.03
 CHILD_SAM_PAD_FABRIC_M = 0.08
 
-# TV-stand-class parents: when the parent's refined Qwen label contains
-# any of these tokens, the cabinet should stay as ONE UNIT (closed
-# cabinet, doors / contents not splittable). Only items literally ON
-# TOP of it should split out as children — TV, speakers, soundbar,
-# remote. Anything else Qwen names (books, headphones, electronic
-# device, etc.) is either inside-cabinet noise or a hallucination and
-# stays bundled with the cabinet body.
-_TV_STAND_PARENT_TOKENS = (
-    "tv stand", "media console", "media unit", "tv unit",
-    "media stand", "media center", "entertainment center",
-    "entertainment unit",
-)
-_TV_STAND_ALLOWED_CHILD_TOKENS = (
-    "tv", "television", "screen", "monitor", "flat screen",
-    "speaker", "soundbar", "remote",
-)
-
-
-def _is_tv_stand(label: str) -> bool:
-    lo = label.lower()
-    return any(tok in lo for tok in _TV_STAND_PARENT_TOKENS)
-
-
-def _is_tv_stand_allowed_child(label: str) -> bool:
-    """Match allowed TV-stand child tokens with plural tolerance: the
-    token must start at a word boundary but can be followed by 's' (or
-    not). So 'speaker' matches both 'speaker' and 'speakers'."""
-    lo = label.lower()
-    return any(re.search(r"\b" + re.escape(tok) + r"s?\b", lo)
-                for tok in _TV_STAND_ALLOWED_CHILD_TOKENS)
-
 # Structural-suffix tokens — when these appear AFTER the parent noun
 # (e.g., 'wooden sideboard legs', 'wooden coffee table base'), the
 # prompt names the parent's own structural piece and shouldn't split
@@ -198,7 +167,6 @@ def main():
         return False
 
     # Split tagged into children vs skip (parent body, legs/base/etc).
-    parent_is_tv_stand = _is_tv_stand(parent_label)
     children_prompts = []
     skipped_prompts = []
     for i, (text, cls) in enumerate(tagged):
@@ -207,11 +175,6 @@ def main():
             continue
         if is_structural(text):
             skipped_prompts.append((text, cls, "structural"))
-            continue
-        # TV-stand-class parents: only TV / speakers / soundbar split
-        # out. Everything else stays bundled with the cabinet body.
-        if parent_is_tv_stand and not _is_tv_stand_allowed_child(text):
-            skipped_prompts.append((text, cls, "tv_stand_keep_in_body"))
             continue
         children_prompts.append((text, cls))
 
@@ -322,18 +285,8 @@ def main():
         written.append({"slug": slug, "label": text, "n_splats": n_kept,
                          "path": str(out_ply.relative_to(obj))})
 
-    # Parent-alone splat selection. Normally: source MINUS all child
-    # splats (so cabinet body has holes where the children were carved
-    # out). For TV-stand parents the user wants the cabinet to stay
-    # whole as one unit — child PLYs sit alongside as duplicates, not
-    # subtractions. Same source splats appear in both parent_alone and
-    # in each child.
-    if parent_is_tv_stand:
-        parent_alone = np.ones(n_total, dtype=bool)
-        print("[parent_alone] TV-stand parent kept WHOLE (children "
-              "duplicate, not subtracted)")
-    else:
-        parent_alone = ~all_child_keep
+    # Parent-alone: source minus all child splats.
+    parent_alone = ~all_child_keep
     parent_dir = children_root / f"00_{parent_slug}"
     parent_dir.mkdir(parents=True, exist_ok=True)
     out_ply = parent_dir / "object.ply"

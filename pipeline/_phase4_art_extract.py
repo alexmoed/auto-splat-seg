@@ -48,7 +48,6 @@ Usage:
     python _phase4_art_extract.py <scene_dir> --quadrant NW --index 0
     python _phase4_art_extract.py <scene_dir> --quadrant NW --label "orange yellow"
 """
-import os
 import argparse
 import base64
 import io
@@ -72,8 +71,8 @@ from sam_carve import render_canonical_5  # noqa: E402
 
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 # Hull extraction
 HULL_PAD_PCT = 0.06            # 6% per side on diorama bbox

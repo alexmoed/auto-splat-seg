@@ -25,7 +25,6 @@ and only need to remove off-axis neighbours that share the parent prompt).
 Usage:
     python bookshelf_sweep.py <scene_dir> <obj_dir>
 """
-import os
 import argparse
 import base64
 import io
@@ -64,8 +63,8 @@ RENDER_MARGIN = 2.0  # match sam_carve
 Y_DOWN = True
 
 # Qwen
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 QWEN_PROMPT = (
     "You are looking at one view of a single piece of furniture and "
     "possibly its surroundings.\n\n"

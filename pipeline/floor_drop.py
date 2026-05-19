@@ -48,7 +48,6 @@ Usage:
     python floor_drop.py <scene_dir> 02_<slug>/ --no-qwen-loop --floor-thresh 0.15
     python floor_drop.py <scene_dir> 02_<slug>/ --max-iterations 3
 """
-import os
 import argparse
 import base64
 import io
@@ -70,7 +69,7 @@ from view import (  # noqa: E402
     load_gsplat_ply, render_splat, rotation_matrix_from_yaw_pitch,
 )
 
-# pipeline sibling — reuse without editing.
+# iteration_1 sibling — reuse without editing.
 sys.path.insert(0, "/home/ubuntu/room_pipeline_v002/pipeline")
 from extract_one import viewmat_look_at, build_K, RENDER_MARGIN  # noqa: E402
 
@@ -81,8 +80,8 @@ UPPER_THRESH_M = 0.18     # CAP on how far ABOVE floor we drop (protects chair b
                            # Qwen-tuned thresh applies only BELOW floor.
 MAX_ITERATIONS = 5
 QWEN_VIEWS = ["topdown", "y180", "y0", "y90"]   # views Qwen sees per iter
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 # Normals-guided drop. A splat is only eligible for drop if its own
 # normal aligns with the floor plane normal (|n_splat · n_plane| > thresh).

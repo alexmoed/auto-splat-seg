@@ -43,7 +43,6 @@ morph cleanup, dilation, projection). This script is the driver.
 Usage:
     python sam_tight.py <scene_dir> 02_<slug>/
 """
-import os
 import argparse
 import base64
 import io
@@ -62,7 +61,7 @@ from plyfile import PlyData, PlyElement
 sys.path.insert(0, "/home/ubuntu/.claude/skills/gsplat-viewer/scripts")
 from view import load_gsplat_ply, render_splat  # noqa: E402
 
-# pipeline siblings — reuse without editing.
+# iteration_1 siblings — reuse without editing.
 sys.path.insert(0, "/home/ubuntu/room_pipeline_v002/pipeline")
 from extract_one import viewmat_look_at, build_K, RENDER_MARGIN  # noqa: E402
 from sam_carve import (  # noqa: E402
@@ -82,27 +81,10 @@ SAM_PAD_FABRIC_M = 0.10     # wider: upholstery, pillows, blankets — soft edge
 # the parent object's bbox (with an asymmetric top pad to keep
 # items-on-top inside the crop). Prevents SAM from latching onto
 # neighboring furniture / wall / decor outside the bbox.
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 CROP_TOP_PAD_PCT = 0.12      # extra upward pad on y_min (catch plant on top)
 CROP_SIDE_PAD_PCT = 0.03     # left / right / bottom pad (small, just slack)
-
-# Table-like parents have widely-splayed legs + a top surface that holds
-# items. The per-view Qwen bbox is often a tight rectangle around the
-# top, cutting legs and base off. Skip the crop entirely for these so
-# sam_tight sees the full silhouette (v12 behavior). Validated 2026-05-14
-# Kitchen_living_dining: v12 living-room coffee table kept 20,059 splats;
-# v14 crop dropped it to 10,242 (-50%). Reverting to no-crop for tables.
-NO_CROP_TOKENS = (
-    "coffee table",
-    "side table",
-    "end table",
-    "dining table",
-    "accent table",
-    "console table",
-    "nightstand",
-    "bench",
-)
 
 
 def _qwen_encode_b64(p: Path, max_dim: int = 1024) -> str:
@@ -309,11 +291,7 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
         sam_input_path = img_path
         crop_x0 = crop_y0 = 0
         crop_w, crop_h = W_img, H_img
-        # Table-like parents skip the crop (their legs splay outside the
-        # per-view tight bbox and would get carved away).
-        skip_crop = parent_label and any(
-            tok in parent_label.lower() for tok in NO_CROP_TOKENS)
-        if parent_label and not skip_crop:
+        if parent_label:
             bbox_norm = qwen_view_bbox(img_path, parent_label)
             if bbox_norm is None:
                 print(f"  [{tag}] Qwen didn't find '{parent_label}' — skip")
@@ -322,8 +300,6 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
             crop_x0, crop_y0, crop_w, crop_h = crop_for_sam(
                 img_path, bbox_norm, W_img, H_img, crop_path)
             sam_input_path = crop_path
-        elif skip_crop:
-            print(f"  [{tag}] no-crop (parent='{parent_label}' matches table-like token)")
 
         # raw_union: unioned undilated mask (for diagnostics)
         # padded_union: per-prompt dilated then unioned
@@ -338,7 +314,7 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
                 continue
             per_prompt_hits[pr] += 1
             # Map crop-space mask back to full image coords.
-            if parent_label and not skip_crop:
+            if parent_label:
                 m = np.zeros((H_img, W_img), dtype=m_crop.dtype)
                 m[crop_y0:crop_y0 + crop_h,
                   crop_x0:crop_x0 + crop_w] = m_crop[:crop_h, :crop_w]

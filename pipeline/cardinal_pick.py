@@ -18,7 +18,6 @@ Usage:
     python cardinal_pick.py <scene_dir> --step 1
     python cardinal_pick.py <scene_dir> --step 2
 """
-import os
 import argparse
 import base64
 import io
@@ -37,8 +36,8 @@ from plyfile import PlyData, PlyElement
 PLUGIN = Path("/home/ubuntu/.claude/local-plugins-marketplace/plugins/pointcloud-segmentation/scripts")
 Y_AXIS_ALIGN = PLUGIN / "y_axis_align.py"
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 FOV = 70.0
 W, H = 1920, 1080

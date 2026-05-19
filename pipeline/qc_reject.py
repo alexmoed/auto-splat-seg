@@ -26,7 +26,6 @@ On REJECT:
 Usage:
     python qc_reject.py <scene_dir> 02_<slug>/
 """
-import os
 import argparse
 import base64
 import io
@@ -39,8 +38,8 @@ from pathlib import Path
 from openai import OpenAI
 from PIL import Image
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 VIEWS = ["y0", "y90", "y180", "y270", "topdown"]
 

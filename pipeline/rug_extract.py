@@ -23,7 +23,6 @@ Pipeline:
 Usage:
     python rug_extract.py <scene_dir> <obj_dir>
 """
-import os
 import argparse
 import base64
 import io
@@ -54,8 +53,8 @@ RENDER_MARGIN = 1.5  # tighter framing for topdown
 TOPDOWN_PITCH = -89.0
 Y_DOWN = True
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 BBOX_PAD_PCT = 0.05            # 5% — matches the lr2 rug recipe
 RUG_BAND_M = 0.10              # keep splats within 10cm above the rug surface

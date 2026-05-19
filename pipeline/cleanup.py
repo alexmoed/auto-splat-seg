@@ -16,7 +16,6 @@ NO obliteration of walls, ceiling, furniture, or wall items.
 Usage:
     python cleanup.py <scene_dir> --step 1
 """
-import os
 import argparse
 import base64
 import io
@@ -33,8 +32,8 @@ from openai import OpenAI
 from plyfile import PlyData, PlyElement
 
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 FOV = 70.0
 W, H = 1920, 1080

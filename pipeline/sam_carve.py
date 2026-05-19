@@ -52,7 +52,7 @@ Steps (run one at a time):
              vote across dilated masks → sam_carved.ply
              [TODO]
 
-Reuses pipeline/extract_one.py for camera math and slug.
+Reuses iteration_1/extract_one.py for camera math and slug.
 Skill imports (gsplat-viewer) for in-process rendering — plugin scripts
 are reference-only, not imported.
 
@@ -60,7 +60,6 @@ Usage:
     python sam_carve.py <scene_dir> 02_<slug>/ --step 1
     python sam_carve.py <scene_dir> 02_<slug>/ --step 2
 """
-import os
 import argparse
 import base64
 import io
@@ -103,8 +102,8 @@ RENDER_MARGIN = 2.0
 
 # Step 2: views Qwen sees to derive SAM prompt (canonical tags, no leading zeros)
 PROMPT_DERIVE_VIEWS = ["y0_p-15", "y90_p-15", "y180_p-15", "y270_p-15"]
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 # Step 3: SAM
 SAM_THRESHOLD = 0.4              # plugin lock
@@ -477,41 +476,8 @@ def _sam_load():
     return _SAM_PROC, _SAM_MODEL, _SAM_DEVICE
 
 
-def _sam_segment_via_http(image_path, prompt, threshold, url):
-    """Call the persistent sam_server.py HTTP endpoint. Used when
-    SAM_URL is set so subprocesses don't each reload SAM weights."""
-    import base64 as _b64
-    import io as _io
-    import os as _os
-    import urllib.request as _ur
-    import json as _json
-    payload = _json.dumps({
-        "image_path": _os.fspath(image_path),
-        "prompt": prompt,
-        "threshold": threshold,
-    }).encode()
-    req = _ur.Request(url + "/segment", data=payload,
-                       headers={"Content-Type": "application/json"})
-    with _ur.urlopen(req, timeout=120) as r:
-        data = _json.loads(r.read())
-    mask = np.array(Image.open(_io.BytesIO(_b64.b64decode(data["mask_b64_png"]))))
-    return mask, data["scores"]
-
-
 def sam_segment(image_path, prompt, threshold=SAM_THRESHOLD):
-    """OR-combined instance mask + scores for the prompt.
-
-    Routes through the SAM server (env SAM_URL, default empty) when set,
-    so SAM weights stay loaded once across the whole pipeline. Falls
-    back to in-process load if the env var is empty or the call fails.
-    """
-    import os as _os
-    url = _os.environ.get("SAM_URL", "").rstrip("/")
-    if url:
-        try:
-            return _sam_segment_via_http(image_path, prompt, threshold, url)
-        except Exception as e:
-            print(f"[sam] HTTP server unreachable ({e}); falling back to in-process load")
+    """OR-combined instance mask + scores for the prompt."""
     proc, model, device = _sam_load()
     img = Image.open(image_path).convert("RGB")
     inputs = proc(images=img, text=prompt, return_tensors="pt").to(device)

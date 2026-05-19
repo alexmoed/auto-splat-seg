@@ -23,7 +23,6 @@ Output: <scene>/01_shell_removed/scene_after.ply + floor_plane.json
 Usage:
     python orient.py <scene_dir> [--raw-ply <path>]
 """
-import os
 import argparse
 import base64
 import io
@@ -48,8 +47,8 @@ TILT_CORRECT = PLUGIN / "tilt_correct.py"
 Y_AXIS_ALIGN = PLUGIN / "y_axis_align.py"
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
 
-QWEN_URL = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen36-awq")
+QWEN_URL = "http://127.0.0.1:8000/v1"
+QWEN_MODEL = "qwen36-awq"
 
 FOV = 70.0
 TOPDOWN_W, TOPDOWN_H = 1920, 1080
