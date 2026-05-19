@@ -70,9 +70,13 @@ def main():
     pipe_prompt = prompt_path.read_text().strip()
 
     # TABLE EXEMPT — low cameras look under the flat top; skip the carve.
-    if any(tok in pipe_prompt.lower() for tok in TABLE_TOKENS):
-        print(f"[sam_low_refine] table/desk detected — low carve SKIPPED; "
-              f"copying 4_sam_tight.ply -> 4b_sam_tight_low.ply")
+    # Check ONLY the parent class (first pipe-union term) — a sub-item
+    # term like "wooden table legs" or "green table lamp shade" must NOT
+    # exempt a sofa. Strip the {soft}/{hard} tag before matching.
+    parent_term = pipe_prompt.split("|")[0].split("{")[0].strip().lower()
+    if any(tok in parent_term for tok in TABLE_TOKENS):
+        print(f"[sam_low_refine] table/desk parent ('{parent_term}') — low "
+              f"carve SKIPPED; copying 4_sam_tight.ply -> 4b_sam_tight_low.ply")
         shutil.copy(str(in_ply), str(out_ply))
         render_canonical_5(out_ply, obj / "renders" / "4b_sam_tight_low")
         diag = obj / "diagnostics" / "4b_sam_tight_low"
