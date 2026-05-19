@@ -180,19 +180,12 @@ def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
     return cx0, cy0, cw, ch
 MIN_VIEWS_FRAC = 0.7        # was 0.8 — too strict, killed bodies
 
-def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
-                    pitches: list = None):
-    """Render the SAM views from in_ply into diag/input_<tag>.png +
+def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None):
+    """Render the 25 SAM views from in_ply into diag/input_<tag>.png +
     save cameras.json. Mirrors sam_carve.step1_render_views but takes
     an input PLY argument. If scene_dir is provided, applies the same
     wall-side camera skip as sam_carve step 1 (skip cameras whose eye
-    sits on the wall-side of the hull's back face).
-
-    `pitches` selects the pitch ring set:
-      - None / PITCHES_DEG  → Pass A high cameras (-15/-45) + topdown.
-      - [0.0, 15.0]         → Pass B low cameras (level / looking up).
-    The two passes are run separately (sam_tight = A, sam_low_refine = B)
-    so the low cameras never enter Pass A's vote-carve."""
+    sits on the wall-side of the hull's back face)."""
     diag.mkdir(parents=True, exist_ok=True)
     for f in diag.glob("input_*.png"):
         f.unlink()
@@ -223,15 +216,8 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
     # corner-adjacent object.
     sam_tight_yaws = list(YAWS_DEG) + [355.0, 5.0]
 
-    # Pitch set is caller-selected (Pass A high vs Pass B low). Pass A is
-    # the -15/-45 above-object rings; Pass B (sam_low_refine.py) supplies
-    # [0, 15] low rings separately. The topdown camera is only added for
-    # the high pass (Pass A) — a topdown is meaningless for the low pass.
-    sam_tight_pitches = list(pitches) if pitches is not None else list(PITCHES_DEG)
-    is_low_pass = pitches is not None and all(p >= 0 for p in pitches)
-
     cameras = []
-    for pitch_deg in sam_tight_pitches:
+    for pitch_deg in PITCHES_DEG:
         ptag = f"p{int(round(pitch_deg))}"
         for yaw_deg in sam_tight_yaws:
             ytag = f"y{int(round(yaw_deg))}"
@@ -253,19 +239,18 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
                 "eye": eye.tolist(), "target": center.tolist(),
                 "png": str(out_png),
             })
-    if not is_low_pass:
-        V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
-                                  FOV, W, H, y_down=Y_DOWN)
-        img = render_splat(scene, V, K, W, H, bg=(1.0, 1.0, 1.0))
-        out_png = diag / "input_topdown.png"
-        Image.fromarray(img).save(out_png)
-        cameras.append({
-            "tag": "topdown", "yaw_deg": 0.0, "pitch_deg": TOPDOWN_PITCH,
-            "fov": FOV, "width": W, "height": H,
-            "V": V.tolist(), "K": K.tolist(),
-            "eye": eye.tolist(), "target": center.tolist(),
-            "png": str(out_png),
-        })
+    V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
+                              FOV, W, H, y_down=Y_DOWN)
+    img = render_splat(scene, V, K, W, H, bg=(1.0, 1.0, 1.0))
+    out_png = diag / "input_topdown.png"
+    Image.fromarray(img).save(out_png)
+    cameras.append({
+        "tag": "topdown", "yaw_deg": 0.0, "pitch_deg": TOPDOWN_PITCH,
+        "fov": FOV, "width": W, "height": H,
+        "V": V.tolist(), "K": K.tolist(),
+        "eye": eye.tolist(), "target": center.tolist(),
+        "png": str(out_png),
+    })
     cam_json = diag / "cameras.json"
     cam_json.write_text(json.dumps({
         "ply_path": str(in_ply),
@@ -273,7 +258,7 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
         "fov": FOV, "width": W, "height": H,
         "y_down": Y_DOWN,
         "yaws_deg": YAWS_DEG,
-        "pitches_deg": sam_tight_pitches,
+        "pitches_deg": PITCHES_DEG,
         "topdown_pitch_deg": TOPDOWN_PITCH,
         "center": center.tolist(),
         "extent": extent,
