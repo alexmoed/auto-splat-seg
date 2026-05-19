@@ -197,8 +197,9 @@ def main():
     ap.add_argument("obj_dir", type=Path)
     ap.add_argument("--vote-frac", type=float, default=VOTE_FRAC)
     ap.add_argument("--bbox-pad-pct", type=float, default=BBOX_PAD_PCT)
-    ap.add_argument("--source-stage", default="3_floor_drop",
-                    help="which earlier stage to source from (default 3_floor_drop)")
+    ap.add_argument("--source-stage", default="4b_sam_tight_low",
+                    help="which earlier stage to source from (default "
+                         "4b_sam_tight_low — Pass B output, always present)")
     args = ap.parse_args()
 
     obj = args.obj_dir.resolve()
