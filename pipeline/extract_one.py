@@ -125,8 +125,8 @@ def main():
                     help="match item by label substring")
     ap.add_argument("--index", type=int, default=None,
                     help="0-based index in qwen_items.json items[]")
-    ap.add_argument("--pad-pct", type=float, default=0.06,
-                    help="fraction per side (default 0.06 = 6%%)")
+    ap.add_argument("--pad-pct", type=float, default=0.04,
+                    help="fraction per side (default 0.04 = 4%%)")
     ap.add_argument("--source-ply", type=Path, default=None,
                     help="default: <scene>/step7_sliced.ply "
                          "(rotated, ceiling cut)")

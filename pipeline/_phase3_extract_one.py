@@ -81,7 +81,7 @@ def main():
                     help="match item by label substring within quadrant")
     ap.add_argument("--index", type=int, default=None,
                     help="0-based index into by_quadrant[<q>]")
-    ap.add_argument("--pad-pct", type=float, default=0.06)
+    ap.add_argument("--pad-pct", type=float, default=0.04)
     ap.add_argument("--source-ply", type=Path, default=None,
                     help="default: <scene>/step7_sliced.ply (FULL scan)")
     ap.add_argument("--no-quadrant-filter", action="store_true",
