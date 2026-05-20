@@ -125,6 +125,18 @@ STAGE_INSIDE_OUTSIDE = (
                   str(o), "--auto"],
     "6_inside_outside.ply",
 )
+# Final cross-stage pick: Qwen looks at sam_tight + sam_tight_low +
+# sweep_fallback + inside_outside renders, picks the cleanest+intact
+# one, copies to final.ply. Each stage excels at different objects
+# (wall-flush cabinets often peak at sam_tight; soft sofas peak at
+# inside_outside; cabriole tables peak at sweep_fallback). One Qwen
+# call per object. Writes final_pick.json with choice + reason.
+STAGE_FINAL_PICK = (
+    "stage_pick",
+    lambda s, o: [sys.executable, str(ITERATION_DIR / "stage_pick.py"),
+                  str(o)],
+    "7_final.ply",
+)
 STAGE_INFO = (
     "info",
     lambda s, o: [sys.executable, str(ITERATION_DIR / "info.py"),
@@ -185,7 +197,8 @@ GENERAL_PRE_QC_STAGES = [
     STAGE_SAM_TIGHT_FROM_FLOOR,
     STAGE_SWEEP_FALLBACK,   # 2026-05-20 — must run BEFORE inside_outside (provides 5_sweep_fallback.ply as input).
     STAGE_SAM_LOW_REFINE,   # 2026-05-20 — low-cam sweep; its masks feed inside_outside (optional).
-    STAGE_INSIDE_OUTSIDE,   # 2026-05-20 — multi-mask carve, FINAL stage.
+    STAGE_INSIDE_OUTSIDE,   # 2026-05-20 — multi-mask carve.
+    STAGE_FINAL_PICK,       # 2026-05-20 — Qwen picks cleanest stage → final.ply.
 ]
 
 # Table chain — same as general but STOPS at 3_floor_drop.
@@ -201,6 +214,7 @@ TABLE_PRE_QC_STAGES = [
     STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
     STAGE_FLOOR_DROP,
     # STAGE_SAM_TIGHT_FROM_FLOOR — SKIPPED for tables (legs)
+    STAGE_FINAL_PICK,       # 2026-05-20 — falls through to 3_floor_drop.ply.
 ]
 
 
@@ -410,6 +424,7 @@ BOOKSHELF_PRE_QC_STAGES = [
     STAGE_FLOOR_DROP,
     STAGE_SAM_TIGHT_BOOKSHELF,
     STAGE_BOOKSHELF_SWEEP,
+    STAGE_FINAL_PICK,       # 2026-05-20 — falls through to 5_bookshelf_sweep.ply.
 ]
 
 

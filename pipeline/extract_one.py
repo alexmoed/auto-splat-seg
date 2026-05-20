@@ -275,7 +275,7 @@ def main():
     # render_canonical_5 from sam_carve so all stages share camera math.
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from sam_carve import render_canonical_5  # noqa: E402
+    from sam_carve import render_canonical_5, check_wall_adjacent_via_qwen  # noqa: E402
     renders_dir = out_dir / "renders" / "1_visual_hull"
     render_canonical_5(out_ply, renders_dir)
     print(f"[render] canonical 5 → {renders_dir}")
@@ -294,6 +294,13 @@ def main():
         "n_splats_total": len(xyz),
     }
     (out_dir / "1_visual_hull_meta.json").write_text(json.dumps(meta, indent=2))
+
+    # Qwen wall-adjacency check — build a wider hull at +10% per side
+    # (vs the tight 4% working hull), render 4 views, ask Qwen one yes/no.
+    # The wider bbox cone catches the wall behind the object if there is
+    # one; free-standing objects' wider hull stays empty behind the back.
+    # sam_tight + sweep_fallback gate wall-skip on the resulting verdict.
+    check_wall_adjacent_via_qwen(scene, out_dir)
 
     print(f"\n[done] STOP")
     print(f"  PLY:     {out_ply}")

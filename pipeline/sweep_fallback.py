@@ -47,7 +47,7 @@ from extract_one import viewmat_look_at, build_K, project_to_pixels  # noqa: E40
 sys.path.insert(0, "/home/ubuntu/.claude/skills/gsplat-viewer/scripts")
 from view import load_gsplat_ply, render_splat  # noqa: E402
 
-from sam_carve import build_camera, render_canonical_5, compute_wall_skip  # noqa: E402
+from sam_carve import build_camera, render_canonical_5, compute_wall_skip, get_wall_skip_callable, parse_tagged_prompts  # noqa: E402
 
 YAWS_DEG = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
 SWEEP_PITCH = -15.0
@@ -205,13 +205,26 @@ def main():
     if not src_ply.exists():
         sys.exit(f"[fatal] no {args.source_stage}.ply in {obj}")
 
+    # Label priority: refined main term from sam_carve's pipe-union
+    # > inventory label > "object". Matches sam_tight's source chain so
+    # all downstream Qwen calls use the same refined name (e.g.
+    # "light wood sideboard" instead of inventory "side table").
     label = "object"
-    meta_path = obj / "1_visual_hull_meta.json"
-    if meta_path.exists():
+    prompt_path = obj / "diagnostics" / "2_sam_wide" / "sam_prompt.txt"
+    if prompt_path.exists():
         try:
-            label = json.load(open(meta_path)).get("label", "object")
+            tagged = parse_tagged_prompts(prompt_path.read_text().strip())
+            if tagged:
+                label = tagged[0][0]  # first pipe-union term, tag stripped
         except Exception:
             pass
+    if label == "object":
+        meta_path = obj / "1_visual_hull_meta.json"
+        if meta_path.exists():
+            try:
+                label = json.load(open(meta_path)).get("label", "object")
+            except Exception:
+                pass
 
     diag = obj / "diagnostics" / "5_sweep_fallback"
     diag.mkdir(parents=True, exist_ok=True)
@@ -237,8 +250,8 @@ def main():
           f"dist={distance:.2f}m margin={RENDER_MARGIN}")
 
     scene = load_gsplat_ply(str(src_ply))
-    _, _, eye_behind_object = compute_wall_skip(
-        args.scene_dir.resolve(), means_f32)
+    _, _, eye_behind_object = get_wall_skip_callable(
+        args.scene_dir.resolve(), args.obj_dir.resolve(), means_f32)
     views = []
 
     for yaw_deg in YAWS_DEG:

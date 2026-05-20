@@ -581,6 +581,18 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"next to a chair, a lamp on a nearby surface, etc.) — these are "
         f"NEIGHBORS, not parts of the target. DO NOT include neighbors in "
         f"the pipe-union, even if they are clearly visible.\n\n"
+        f"⚠️ INVENTORY LABEL CAN BE WRONG: the label '{label}' was derived "
+        f"from a TOP-DOWN view, which sometimes mis-identifies the noun "
+        f"class. From above, a sideboard can look like a side table; a "
+        f"long dining table can look like a cabinet; a tv stand can look "
+        f"like a console. If the cardinal renders show a different kind "
+        f"of object than the label suggests, NAME IT CORRECTLY — the noun "
+        f"can change, not just the adjectives.\n"
+        f"BUT the target is still the SAME PHYSICAL OBJECT centered in "
+        f"these views. If labeled 'table' and you see a table surrounded "
+        f"by chairs, the target is the TABLE — a chair is a neighbor, "
+        f"not a re-naming. Refine the label of the centered object; "
+        f"don't swap it for a neighbor.\n\n"
         f"What COUNTS as part of the target:\n"
         f"  - The target object itself (the '{label}')\n"
         f"  - Items SITTING ON it (pillows on a sofa, books on a table, "
@@ -652,6 +664,18 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
             f"This is the ONLY object to describe. Other furniture nearby "
             f"(chairs around a table, side table near a sofa, etc.) is NOT "
             f"part of the target — EXCLUDE them entirely from the prompt.\n\n"
+            f"⚠️ INVENTORY LABEL CAN BE WRONG: '{label}' was derived from "
+            f"a TOP-DOWN view, which sometimes mis-identifies the noun "
+            f"class. From above, a sideboard can look like a side table; "
+            f"a long dining table can look like a cabinet; a tv stand can "
+            f"look like a console. If the cardinal renders show a "
+            f"different kind of object than the label suggests, NAME IT "
+            f"CORRECTLY — the noun can change, not just the adjectives.\n"
+            f"BUT the target is still the SAME PHYSICAL OBJECT centered "
+            f"in these views. If labeled 'table' and you see a table "
+            f"surrounded by chairs, the target is the TABLE — a chair is "
+            f"a neighbor, not a re-naming. Refine the label of the "
+            f"centered object; don't swap it for a neighbor.\n\n"
             f"Build a short pipe-union SAM3 prompt with up to THREE kinds "
             f"of terms:\n"
             f"  1. The main object (refine the name if you can: 'tufted "
@@ -1065,6 +1089,175 @@ def render_canonical_5(ply_path: Path, out_dir: Path):
     img = render_splat(scene, V, K, CANONICAL_W, CANONICAL_H,
                         bg=(1.0, 1.0, 1.0))
     Image.fromarray(img).save(out_dir / "topdown.png")
+
+
+def check_wall_adjacent_via_qwen(scene_dir: Path, obj_dir: Path,
+                                  wide_pad_per_side: float = 0.10):
+    """Build a wider visual hull (default 10% pad per side, vs the tight
+    4% the working hull uses) by re-projecting the source PLY through
+    the same camera with a widened bbox. If the object is flush against
+    a wall, wall splats fall INSIDE the wider cone and become visible
+    in the rendered views. Free-standing objects' wider hull stays
+    empty behind the back face.
+
+    Ask Qwen ONE yes/no question on the 4 wide-hull views: "Is this
+    object up against a wall?"
+
+    Writes:
+      <obj>/renders/1_visual_hull_wide/{y0,y90,y180,y270}.png   (Qwen's input)
+      <obj>/wall_adjacent.json  ({"wall_adjacent": bool, "reason": str})
+    The wide-hull PLY is built in memory only — not saved to disk.
+    """
+    meta_path = obj_dir / "1_visual_hull_meta.json"
+    if not meta_path.exists():
+        print(f"[wall-check] no meta at {meta_path} — skipping")
+        return
+    meta = json.load(open(meta_path))
+    bbox_tight = meta.get("bbox_pixels_tight")
+    cam = meta.get("camera")
+    source_ply_path = meta.get("source_ply")
+    if not (bbox_tight and cam and source_ply_path):
+        print(f"[wall-check] meta missing required fields — skipping")
+        return
+    source_ply = Path(source_ply_path)
+    if not source_ply.exists():
+        print(f"[wall-check] source PLY missing: {source_ply} — skipping")
+        return
+
+    # Widen the bbox to ±wide_pad_per_side. Done in pixels.
+    img_w, img_h = cam["width"], cam["height"]
+    x0, y0, x1, y1 = bbox_tight
+    bw, bh = x1 - x0, y1 - y0
+    px = bw * wide_pad_per_side
+    py = bh * wide_pad_per_side
+    bbox_wide = [
+        max(0, int(x0 - px)),
+        max(0, int(y0 - py)),
+        min(img_w, int(x1 + px)),
+        min(img_h, int(y1 + py)),
+    ]
+    print(f"[wall-check] tight bbox: {bbox_tight}")
+    print(f"[wall-check] wide bbox  : {bbox_wide}  "
+          f"(+{wide_pad_per_side*100:.0f}% per side)")
+
+    # Re-project source through the same camera + filter to wide bbox
+    import sys as _sys
+    pipeline_dir = Path(__file__).resolve().parent
+    _sys.path.insert(0, str(pipeline_dir))
+    from extract_one import viewmat_look_at as _viewmat, build_K as _build_K, \
+        project_to_pixels as _proj
+    V = _viewmat(cam["eye"], cam["target"], cam["up"])
+    K = _build_K(cam["fov"], cam["width"], cam["height"])
+
+    print(f"[wall-check] reading source {source_ply.name}...")
+    pl = PlyData.read(str(source_ply))
+    vdata = pl["vertex"]
+    xyz = np.stack([vdata["x"], vdata["y"], vdata["z"]],
+                    axis=1).astype(np.float64)
+    u, v_img, in_front = _proj(xyz, V, K)
+    inside = ((u >= bbox_wide[0]) & (u <= bbox_wide[2]) &
+              (v_img >= bbox_wide[1]) & (v_img <= bbox_wide[3]))
+    keep = in_front & inside
+    n_kept = int(keep.sum())
+    print(f"[wall-check] wide-hull splats: {n_kept:,}")
+
+    # Save temp wide-hull PLY (deleted at end of this function), render it
+    from plyfile import PlyElement
+    tmp_wide_path = obj_dir / "_tmp_wide_hull.ply"
+    PlyData([PlyElement.describe(vdata.data[keep], "vertex")],
+             text=False).write(str(tmp_wide_path))
+
+    wide_scene = load_gsplat_ply(str(tmp_wide_path))
+    wmeans = wide_scene["means"].detach().cpu().numpy()
+    lo = np.percentile(wmeans, 2, axis=0)
+    hi = np.percentile(wmeans, 98, axis=0)
+    center = ((lo + hi) * 0.5).astype(np.float32)
+    extent = max(float((hi - lo).max()), 0.15)
+    tan_half = math.tan(math.radians(FOV) / 2)
+    distance = (extent * 1.55) / (2 * tan_half) + 0.5
+
+    wide_dir = obj_dir / "renders" / "1_visual_hull_wide"
+    wide_dir.mkdir(parents=True, exist_ok=True)
+    for f in wide_dir.glob("*.png"):
+        f.unlink()
+    view_paths = []
+    for yaw_deg in CANONICAL_YAWS:
+        V2, K2, _ = build_camera(center, yaw_deg, CANONICAL_PITCH, distance,
+                                  FOV, CANONICAL_W, CANONICAL_H, y_down=Y_DOWN)
+        img = render_splat(wide_scene, V2, K2, CANONICAL_W, CANONICAL_H,
+                            bg=(1.0, 1.0, 1.0))
+        out_png = wide_dir / f"y{int(yaw_deg)}.png"
+        Image.fromarray(img).save(out_png)
+        view_paths.append((f"y{int(yaw_deg)}", out_png))
+    print(f"[wall-check] rendered 4 wide-hull views → {wide_dir}")
+
+    tmp_wide_path.unlink()  # discard the wide hull
+
+    # Single yes/no question
+    client = OpenAI(base_url=QWEN_URL, api_key="sk-x")
+    content = []
+    for tag, p in view_paths:
+        content.append({"type": "text", "text": f"\nView {tag}:"})
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{encode_b64(p)}"}})
+    content.append({"type": "text", "text": (
+        "These 4 views show an object surrounded by a 10% per-side bbox "
+        "expansion of its tight crop. If the object is flush against a "
+        "wall, the wall is visible behind/beside it. If freestanding, "
+        "you see only the object with empty/background behind it.\n\n"
+        "Is this object up against a wall? Reply with EXACTLY one of:\n"
+        "  YES\n"
+        "  NO"
+    )})
+
+    print(f"[wall-check] asking Qwen...")
+    r = client.chat.completions.create(
+        model=QWEN_MODEL,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=20, temperature=0.1,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    raw = r.choices[0].message.content.strip()
+    print(f"[wall-check] qwen raw: {raw!r}")
+    is_wall = raw.upper().startswith("YES")
+
+    verdict = {"wall_adjacent": is_wall, "reason": raw,
+                "wide_pad_per_side": wide_pad_per_side}
+    out_path = obj_dir / "wall_adjacent.json"
+    out_path.write_text(json.dumps(verdict, indent=2))
+    print(f"[wall-check] wrote {out_path}")
+    print(f"[wall-check] verdict: wall_adjacent={is_wall}")
+    return verdict
+
+
+def get_wall_skip_callable(scene_dir: Path, obj_dir: Path, means):
+    """Return (wall_axis, wall_back, eye_behind_object_callable).
+
+    Gated on Qwen wall-adjacency verdict:
+      - If wall_adjacent.json says true → real compute_wall_skip
+      - Else (file missing, or false) → no-op (keep all cameras)
+
+    Callers (sam_tight, sweep_fallback) use this instead of calling
+    compute_wall_skip directly so wall-skip only kicks in when Qwen
+    confirmed the object is flush against a wall — preventing the
+    2026-05-20 failure where wall-skip killed wall-adjacent table legs
+    by treating ALL ≤2.5m-from-wall objects as wall-flush."""
+    verdict_path = obj_dir / "wall_adjacent.json"
+    if not verdict_path.exists():
+        print(f"[wall-skip] no wall_adjacent.json — keeping all cameras")
+        return None, None, (lambda eye: False)
+    try:
+        verdict = json.load(open(verdict_path))
+    except Exception:
+        print(f"[wall-skip] failed to read {verdict_path} — keeping all cameras")
+        return None, None, (lambda eye: False)
+    if not verdict.get("wall_adjacent", False):
+        print(f"[wall-skip] qwen verdict wall_adjacent=false — "
+              f"keeping all cameras")
+        return None, None, (lambda eye: False)
+    print(f"[wall-skip] qwen verdict wall_adjacent=true (side="
+          f"{verdict.get('side', '?')}) — applying compute_wall_skip")
+    return compute_wall_skip(scene_dir, means)
 
 
 def step4_vote_carve(scene_dir: Path, obj_dir: Path):

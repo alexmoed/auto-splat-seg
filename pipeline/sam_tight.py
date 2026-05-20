@@ -70,7 +70,7 @@ from sam_carve import (  # noqa: E402
     build_camera, render_canonical_5,
     sam_segment, dilate_mask, morph_clean,
     MIN_PROMPT_PX, MIN_VIEW_PX, SAM_THRESHOLD,
-    parse_tagged_prompts, compute_wall_skip,
+    parse_tagged_prompts, compute_wall_skip, get_wall_skip_callable,
 )
 
 # TIGHT-pass parameters (override sam_wide defaults)
@@ -181,7 +181,7 @@ def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
 MIN_VIEWS_FRAC = 0.7        # was 0.8 — too strict, killed bodies
 
 def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
-                    pitches: list = None):
+                    obj_dir: Path = None, pitches: list = None):
     """Render the SAM views from in_ply into diag/input_<tag>.png +
     save cameras.json. Mirrors sam_carve.step1_render_views but takes
     an input PLY argument. If scene_dir is provided, applies the same
@@ -212,11 +212,14 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
     print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
           f"dist={distance:.2f}m margin={RENDER_MARGIN}")
 
-    # Wall-skip removed 2026-05-20. Render all cameras. SAM handles wall
-    # backgrounds correctly; the skip was killing wall-adjacent table
-    # legs because the back-side "legs" prompt never had any view to
-    # vote in.
-    eye_behind_object = lambda eye: False
+    # Wall-skip gated on Qwen verdict (2026-05-20 v2): the blanket disable
+    # from earlier today over-corrected — it fixed wall-adjacent tables
+    # (thin legs surviving) but broke wall-adjacent cabinets/sideboards
+    # (back face flush against wall, backside views see wall-through-body
+    # and vote drops the cabinet body). get_wall_skip_callable reads
+    # wall_adjacent.json (written by check_wall_adjacent_via_qwen at the
+    # 1_visual_hull stage) — true → real wall-skip, false → no-op.
+    _, _, eye_behind_object = get_wall_skip_callable(scene_dir, obj_dir, means)
 
     # Extend YAWS_DEG with ±5° offsets around y0 (= y355 and y5) so
     # SAM/Qwen also see slightly off-axis front views — helpful when the
@@ -481,7 +484,7 @@ def main():
 
     # Step A: render 25 views from floor_drop.ply
     print(f"\n[A] rendering 25 views from floor_drop.ply...")
-    render_25_views(in_ply, diag, scene_dir=scene)
+    render_25_views(in_ply, diag, scene_dir=scene, obj_dir=obj)
 
     # Step B: SAM each view (per-prompt pad). Pass the main prompt
     # (first pipe-union term) as parent_label so SAM only sees the

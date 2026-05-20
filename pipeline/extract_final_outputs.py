@@ -25,6 +25,8 @@ from pathlib import Path
 ITERATION_DIR = Path(__file__).resolve().parent
 
 OBJECT_STAGE_PREFERENCE = [
+    "7_final",                 # 2026-05-20 — stage_pick output (preferred)
+    "6_inside_outside",        # 2026-05-20 — multi-mask final stage
     "5_subtracted",
     "5_bookshelf_sweep",
     "4_rug",

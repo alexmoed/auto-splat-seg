@@ -239,6 +239,13 @@ def main():
     }
     (out_dir / "1_visual_hull_meta.json").write_text(json.dumps(meta, indent=2))
 
+    # Qwen wall-adjacency check — same as extract_one.py. Builds a wider
+    # hull at +10% per side, renders 4 views, asks Qwen one yes/no.
+    # Writes wall_adjacent.json so sam_tight + sweep_fallback can gate
+    # wall-skip on it.
+    from sam_carve import check_wall_adjacent_via_qwen  # noqa: E402
+    check_wall_adjacent_via_qwen(scene, out_dir)
+
     print(f"\n[done] STOP")
     print(f"  PLY:     {out_ply}")
     print(f"  qa-render: {out_png}")

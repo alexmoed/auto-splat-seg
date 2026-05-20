@@ -100,7 +100,8 @@ def main():
 
     print(f"\n[B] rendering LOW-camera views ({LOW_PITCHES}) from "
           f"4_sam_tight.ply...")
-    render_25_views(in_ply, diag, scene_dir=scene, pitches=LOW_PITCHES)
+    render_25_views(in_ply, diag, scene_dir=scene, obj_dir=obj,
+                    pitches=LOW_PITCHES)
     # V21_YAWS hack removed 2026-05-20 — was a skip-pattern band-aid.
     # All low cameras are used; SAM handles whichever yaws return masks.
 

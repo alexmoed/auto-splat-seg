@@ -85,7 +85,12 @@ def main():
     # 4_sam_tight.ply → 4_sam_tight_rejected.ply on qc REJECT, which
     # makes 5_sweep_fallback the highest-ranked existing stage on the
     # recovery pass.
-    stage_candidates = ["5_subtracted", "5_bookshelf_sweep", "4_rug",
+    # 2026-05-20 — prefer stage_pick's 7_final.ply > 6_inside_outside.ply
+    # > earlier stages. The renders/ dir matches: renders/7_final/
+    # exists when stage_pick ran, renders/6_inside_outside/ when only
+    # inside_outside ran, etc.
+    stage_candidates = ["7_final", "6_inside_outside",
+                         "5_subtracted", "5_bookshelf_sweep", "4_rug",
                          "4_sam_tight", "5_sweep_fallback", "3_floor_drop"]
     stage = next((s for s in stage_candidates if (obj / f"{s}.ply").exists()), None)
     if stage is None:
