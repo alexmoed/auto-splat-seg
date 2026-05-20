@@ -139,6 +139,21 @@ GENERAL_PRE_QC_STAGES = [
     STAGE_SAM_TIGHT_FROM_FLOOR,
 ]
 
+# Table chain — same as general but STOPS at 3_floor_drop.
+# sam_tight is omitted because its vote_carve eats wall-adjacent table
+# legs: compute_wall_skip drops every back-hemisphere camera, so back
+# legs never accumulate the ≥0.7·N_views needed to survive the vote
+# (v25 dining_table 2026-05-20 — kept 70,097 with legs gone, vs
+# floor_drop's 80,480 with legs intact). 3_floor_drop.ply is a pure
+# geometric carve (RANSAC floor + normal-aware band drop) and keeps
+# the legs cleanly.
+TABLE_PRE_QC_STAGES = [
+    STAGE_SAM_CARVE_S1, STAGE_SAM_CARVE_S2,
+    STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
+    STAGE_FLOOR_DROP,
+    # STAGE_SAM_TIGHT_FROM_FLOOR — SKIPPED for tables (legs)
+]
+
 
 def _read_qc_verdict(obj_dir: Path) -> str | None:
     p = obj_dir / "qc_reject.json"
@@ -389,6 +404,34 @@ def run_rug(scene: Path, obj_dir: Path) -> dict:
                              allow_sweep_fallback=False)
 
 
+def run_table(scene: Path, obj_dir: Path) -> dict:
+    """Table chain: sam_carve → floor_drop → STOP.
+    Skips sam_tight (would carve back-legs on wall-adjacent tables —
+    see TABLE_PRE_QC_STAGES note). Promotes 3_floor_drop.ply →
+    4_sam_tight.ply so downstream (info, qc_reject, split_children)
+    finds the expected file name."""
+    import shutil as _sh
+    status = _run_chain(scene, obj_dir, TABLE_PRE_QC_STAGES)
+    floor = obj_dir / "3_floor_drop.ply"
+    tight = obj_dir / "4_sam_tight.ply"
+    if floor.exists():
+        _sh.copy(str(floor), str(tight))
+        status["sam_tight"] = "skipped_table_route → 4_sam_tight = 3_floor_drop"
+    status = _post_extract_qc(scene, obj_dir, status)
+    # Same split_children as run_general (table can have items on top —
+    # bowl/plant/pitcher/etc.).
+    if obj_dir.exists() and (obj_dir / "diagnostics" / "2_sam_wide" /
+                              "sam_prompt.txt").exists():
+        if (obj_dir / "children" / "manifest.json").exists():
+            status["split_children"] = "skip"
+        else:
+            rc = subprocess.run([sys.executable,
+                                  str(ITERATION_DIR / "split_children.py"),
+                                  str(scene), str(obj_dir)]).returncode
+            status["split_children"] = "ok" if rc == 0 else f"fail({rc})"
+    return status
+
+
 def run_skip(scene: Path, obj_dir: Path) -> dict:
     print("  [skip] no extraction; object will roll into leftover")
     return {"skip": "ok"}
@@ -399,6 +442,7 @@ PROCEDURES = {
     "tv":        run_tv,
     "bookshelf": run_bookshelf,
     "rug":       run_rug,
+    "table":     run_table,
     "skip":      run_skip,
 }
 
@@ -416,6 +460,14 @@ BOOKSHELF_PATTERN = re.compile(
     re.IGNORECASE)
 RUG_PATTERN = re.compile(
     r"\b(rug|carpet|area\s+rug|floor\s+mat|runner)\b", re.IGNORECASE)
+# Match standalone "table" or "desk" — covers dining/coffee/side/console
+# table + desk. Does NOT match sideboard (which is furniture, has lots
+# of items on top, needs sam_tight + multi-mask inside_outside).
+TABLE_PATTERN = re.compile(r"\b(table|desk)\b", re.IGNORECASE)
+# Don't route sideboards / cabinets to the table chain — they need the
+# full sam_tight + on-top-items path.
+TABLE_EXCLUDE = re.compile(r"\b(sideboard|cabinet|console|nightstand)\b",
+                           re.IGNORECASE)
 
 
 def decide_procedure(label: str) -> str:
@@ -430,6 +482,8 @@ def decide_procedure(label: str) -> str:
         return "bookshelf"
     if RUG_PATTERN.search(lo):
         return "rug"
+    if TABLE_PATTERN.search(lo) and not TABLE_EXCLUDE.search(lo):
+        return "table"
     return "general"
 
 

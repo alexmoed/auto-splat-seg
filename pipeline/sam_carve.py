@@ -335,12 +335,30 @@ def parse_tagged_prompts(pipe_str: str) -> list[tuple[str, str]]:
 def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
     """Qwen looks at 4 cardinal views of the visual hull and describes
     the object + any sub-items (pillows, throws, blankets, etc).
-    Output is a pipe-union SAM prompt saved to sam_prompt.txt."""
+    Output is a pipe-union SAM prompt saved to sam_prompt.txt.
+
+    Two routes based on object class (2026-05-20):
+      - Cabinets/countertops/sideboards/consoles: RICH prompt with part
+        decomposition (lamp -> shade+base, etc.) — captures the many
+        distinct items on display surfaces.
+      - Everything else: V13-STYLE SIMPLE prompt — just main + items on
+        top + legs. The rich prompt over-decomposes for tables/sofas
+        and pulls neighboring chairs/stools into the pipe-union, which
+        pollutes the SAM vote and kills the legs (v25 dining_table)."""
     meta_path = obj_dir / "1_visual_hull_meta.json"
     if not meta_path.exists():
         sys.exit(f"[fatal] missing {meta_path}\n  run extract_one.py first")
     meta = json.load(open(meta_path))
     label = meta.get("label", "object")
+
+    # Class router: use the rich prompt only for display surfaces that
+    # actually need part-decomposition. Tables/sofas/chairs use simple.
+    CABINET_TOKENS = ("cabinet", "countertop", "sideboard", "console",
+                      "buffet", "hutch", "credenza", "shelving unit",
+                      "display shelf")
+    _ll = (label or "").lower()
+    use_rich = any(tok in _ll for tok in CABINET_TOKENS)
+    print(f"[step2] prompt route: {'RICH (cabinet/countertop)' if use_rich else 'SIMPLE (v13-style)'}")
 
     diag = obj_dir / "diagnostics" / "2_sam_wide"
     images = []
@@ -369,7 +387,8 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         content.append({"type": "text", "text": f"\nView {tag}:"})
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{encode_b64(p)}"}})
-    content.append({"type": "text", "text":
+    if use_rich:
+        rich_text = (
         f"You are looking at 4 views of a SINGLE piece of furniture.\n\n"
         f"⚠️ THE TARGET OBJECT IS: '{label}'.\n"
         f"This is the ONLY object you should describe. Other objects may be "
@@ -435,7 +454,46 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"and a TV typically are — include them). A coffee table NEXT TO "
         f"the cabinet would NOT be included.\n\n"
         f"Output ONLY the pipe-union string with tags. No commentary, no "
-        f"markdown, no quotes, no JSON, no explanation."})
+        f"markdown, no quotes, no JSON, no explanation.")
+        content.append({"type": "text", "text": rich_text})
+    else:
+        # SIMPLE v13-style: short prompt, no part-decomposition,
+        # no neighbor-collection language. Just main + items on top
+        # + legs. Matches what v13's sam_carve produced for tables/
+        # sofas/chairs and worked end-to-end.
+        simple_text = (
+            f"You are looking at 4 views of a SINGLE piece of furniture.\n\n"
+            f"⚠️ THE TARGET OBJECT IS: '{label}'.\n"
+            f"This is the ONLY object to describe. Other furniture nearby "
+            f"(chairs around a table, side table near a sofa, etc.) is NOT "
+            f"part of the target — EXCLUDE them entirely from the prompt.\n\n"
+            f"Build a short pipe-union SAM3 prompt with up to THREE kinds "
+            f"of terms:\n"
+            f"  1. The main object (refine the name if you can: 'tufted "
+            f"chesterfield sofa' instead of 'sofa').\n"
+            f"  2. SMALL ITEMS resting on its top surface (book on table, "
+            f"pillow on sofa, cup on table). Name each as a single term; "
+            f"DO NOT decompose into parts. If nothing on top, skip.\n"
+            f"  3. The target's OWN structural pieces (its legs, base, "
+            f"pedestal) — ONLY if clearly visible and not hidden by a "
+            f"skirt. NOT legs of a neighboring chair.\n\n"
+            f"Strict exclusions: NO chairs around a dining table, NO "
+            f"cushions on those chairs, NO floor lamps next to a sofa, "
+            f"NO neighboring furniture. If you see a chair around the "
+            f"target table, the chair is NOT part of the target.\n\n"
+            f"Append a class tag to each term: '{{soft}}' for "
+            f"upholstered/fabric, '{{hard}}' for rigid.\n\n"
+            f"Output format:\n"
+            f"<main> {{tag}}|<item 1> {{tag}}|...|<legs> {{tag}}\n\n"
+            f"Examples (v13-style — short, no neighbors, no decomposition):\n"
+            f'- target=light wood dining table: light wood dining table {{hard}}|small potted plant {{hard}}|bowl of fruit {{hard}}|wooden mug {{hard}}|wooden table legs {{hard}}\n'
+            f'- target=wooden coffee table: wooden coffee table {{hard}}|small decorative items on table {{hard}}|wooden table legs {{hard}}\n'
+            f'- target=grey armchair: grey armchair {{soft}}|striped pillow {{soft}}|wooden chair legs {{hard}}\n'
+            f'- target=green sofa: green sofa {{soft}}|orange pillow {{soft}}|gray throw {{soft}}\n\n'
+            f"Output ONLY the pipe-union string with tags. No commentary, "
+            f"no markdown, no quotes, no JSON, no explanation."
+        )
+        content.append({"type": "text", "text": simple_text})
     r = client.chat.completions.create(
         model=QWEN_MODEL,
         messages=[{"role": "user", "content": content}],

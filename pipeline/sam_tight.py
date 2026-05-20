@@ -212,10 +212,11 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
     print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
           f"dist={distance:.2f}m margin={RENDER_MARGIN}")
 
-    if scene_dir is not None:
-        _, _, eye_behind_object = compute_wall_skip(scene_dir, means)
-    else:
-        eye_behind_object = lambda eye: False
+    # Wall-skip removed 2026-05-20. Render all cameras. SAM handles wall
+    # backgrounds correctly; the skip was killing wall-adjacent table
+    # legs because the back-side "legs" prompt never had any view to
+    # vote in.
+    eye_behind_object = lambda eye: False
 
     # Extend YAWS_DEG with ±5° offsets around y0 (= y355 and y5) so
     # SAM/Qwen also see slightly off-axis front views — helpful when the
