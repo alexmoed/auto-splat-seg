@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""rename_to_qwen.py — rename every <scene>/02_<slug>/ directory to use
-the Qwen-refined parent label from sam_carve step 2 (the first pipe-union
-term in diagnostics/2_sam_wide/sam_prompt.txt, stripped of {soft}/{hard}
-tags and slugified).
+"""rename_to_qwen.py — rename every <scene>/02_<slug>/ directory using
+the rich descriptive name from info.py's info.json (preferred), with
+fallback to sam_carve step 2's coarse refined label when info.json is
+absent.
 
-Why: inventory.py picks a coarse label ("dark cabinet"), but Qwen often
-refines it during sam_carve step 2 ("wooden media console"). The folder
-should reflect the refined name so the final .splat outputs (named from
-the folder slug) are accurate.
+Label source priority:
+  1. <obj>/info.json["object_type"]    — rich description from Qwen
+     looking at the FINAL extracted images (4_sam_tight / 7_final
+     renders). Examples: "wooden media cabinet with flat-screen tv and
+     speakers", "beige sectional sofa with green and pink pillows".
+  2. <obj>/diagnostics/2_sam_wide/sam_prompt.txt first pipe-union term
+     — coarse refined label from sam_carve step 2 looking at the hull.
+     Examples: "wooden cabinet", "beige sectional sofa".
 
-Run AT THE END of the pipeline, after step 2 dispatch is complete and
-before extract_final_outputs / merge_scene. Re-run those two after this
-script so the final outputs pick up the new names.
+Why prefer info.json: it's derived from the FINAL extracted shape, so
+it captures what actually ended up in the splat (e.g. the cabinet
+ended up with TV + speakers on it, so the rich name reflects that).
+The sam_carve step 2 label is derived from the hull before any carve.
+
+Run AT THE END of the pipeline, after info.py has run on every object,
+and before extract_final_outputs / merge_scene. Re-run those two after
+this script so the final outputs pick up the new names.
 
 Usage:
     python rename_to_qwen.py <scene_dir>
@@ -28,14 +37,34 @@ ITER = Path(__file__).resolve().parent
 sys.path.insert(0, str(ITER))
 from sam_carve import parse_tagged_prompts  # noqa: E402
 
+# Cap slug length so rich descriptions don't blow up filesystem limits.
+# 60 chars covers things like "wooden_media_cabinet_with_flat_screen_tv_and_speakers".
+MAX_SLUG_LEN = 60
+
 
 def slugify(label: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "_", label.lower()).strip("_")
+    if len(s) > MAX_SLUG_LEN:
+        s = s[:MAX_SLUG_LEN].rstrip("_")
     return s or "object"
 
 
 def extract_refined_label(obj_dir: Path) -> str | None:
-    """Read the first piped term in sam_prompt.txt, strip the tag."""
+    """Prefer Qwen's free-form name from info.json (independent review of
+    the FINAL renders). Fall back to legacy object_type, then to the
+    sam_carve step-2 coarse label as a last resort."""
+    # Source 1: info.json's `name` (Qwen names the object freely
+    # looking at 13 rendered angles of the picked PLY)
+    info_p = obj_dir / "info.json"
+    if info_p.exists():
+        try:
+            info = json.load(open(info_p))
+            name = (info.get("name") or info.get("object_type") or "").strip()
+            if name:
+                return name
+        except Exception:
+            pass
+    # Source 2: sam_carve step-2 first pipe-union term (coarse, from hull)
     p = obj_dir / "diagnostics" / "2_sam_wide" / "sam_prompt.txt"
     if not p.exists():
         return None
@@ -43,7 +72,7 @@ def extract_refined_label(obj_dir: Path) -> str | None:
     tagged = parse_tagged_prompts(pipe)
     if not tagged:
         return None
-    return tagged[0][0]  # first prompt's text (already untagged)
+    return tagged[0][0]
 
 
 def main():
