@@ -46,14 +46,14 @@ from extract_one import viewmat_look_at, build_K, project_to_pixels  # noqa: E40
 sys.path.insert(0, "/home/ubuntu/.claude/skills/gsplat-viewer/scripts")
 from view import load_gsplat_ply, render_splat  # noqa: E402
 
-from sam_carve import build_camera, render_canonical_5, compute_wall_skip  # noqa: E402
+from sam_carve import build_camera, render_canonical_5  # noqa: E402
 
 # Sweep cameras: 12 yaws × 1 pitch + topdown = 13 views.
 # Single pitch (not 2) — adding p=-45 doubles Qwen calls without
 # adding angular separation in xz; sweep is about xz separation
 # of bookshelf vs neighbour. Dense 10° steps so the vote has lots
 # of good-angle data; views where Qwen says found=false are skipped.
-YAWS_DEG = list(range(0, 360, 10))  # 36 yaws at 10° steps
+YAWS_DEG = list(range(0, 360, 5))  # 72 yaws at 5° steps (was 10° = 36)
 SWEEP_PITCH = -15.0
 TOPDOWN_PITCH = -89.0
 
@@ -205,14 +205,25 @@ def main():
     ap.add_argument("obj_dir", type=Path)
     ap.add_argument("--vote-frac", type=float, default=VOTE_FRAC,
                     help=f"keep splat if inside ≥this × N_valid views (default {VOTE_FRAC})")
+    ap.add_argument("--pitches", type=str, default=str(SWEEP_PITCH),
+                    help=f"comma-separated pitches in degrees (default {SWEEP_PITCH}; "
+                         "low-pass usage: --pitches 0,15)")
+    ap.add_argument("--out-name", type=str, default="5_bookshelf_sweep",
+                    help="output PLY basename + diagnostics dir name "
+                         "(default '5_bookshelf_sweep'; low-pass: '5b_bookshelf_sweep_low')")
+    ap.add_argument("--src-ply", type=str, default="4_sam_tight.ply",
+                    help="source PLY filename inside obj_dir (default 4_sam_tight.ply)")
     args = ap.parse_args()
 
     obj = args.obj_dir.resolve()
-    src_ply = obj / "4_sam_tight.ply"
+    src_ply = obj / args.src_ply
     if not src_ply.exists():
-        sys.exit(f"[fatal] no 4_sam_tight.ply in {obj} — run sam_tight first")
+        sys.exit(f"[fatal] no {args.src_ply} in {obj} — run prereqs first")
 
-    diag = obj / "diagnostics" / "5_bookshelf_sweep"
+    sweep_pitches = [float(p.strip()) for p in args.pitches.split(",") if p.strip()]
+    out_name = args.out_name
+
+    diag = obj / "diagnostics" / out_name
     diag.mkdir(parents=True, exist_ok=True)
     for f in diag.glob("*.png"):
         f.unlink()
@@ -240,19 +251,22 @@ def main():
     # Render all sweep views. NO wall-skip — Qwen's found/not-found
     # response is a finer filter than geometric wall-skip and lets us
     # keep any view where the bookshelf is actually visible.
+    # (Geometric compute_wall_skip over-skips for bookshelves in corners
+    # because it sees a side wall as nearest; experiment 2026-05-22.)
     scene = load_gsplat_ply(str(src_ply))
     views = []  # list of (tag, V, K, png_path)
 
-    for yaw_deg in YAWS_DEG:
-        tag = f"y{int(round(yaw_deg))}_p{int(round(SWEEP_PITCH))}"
-        V, K, eye = build_camera(center, yaw_deg, SWEEP_PITCH, distance,
-                                  FOV, W, H, y_down=Y_DOWN)
-        img = render_splat(scene, V.astype(np.float32),
-                           K.astype(np.float32), W, H, bg=(1.0, 1.0, 1.0))
-        png = diag / f"input_{tag}.png"
-        Image.fromarray(img).save(png)
-        views.append({"tag": tag, "V": V, "K": K,
-                      "eye": eye.tolist(), "png": str(png)})
+    for pitch_deg in sweep_pitches:
+        for yaw_deg in YAWS_DEG:
+            tag = f"y{int(round(yaw_deg))}_p{int(round(pitch_deg))}"
+            V, K, eye = build_camera(center, yaw_deg, pitch_deg, distance,
+                                      FOV, W, H, y_down=Y_DOWN)
+            img = render_splat(scene, V.astype(np.float32),
+                               K.astype(np.float32), W, H, bg=(1.0, 1.0, 1.0))
+            png = diag / f"input_{tag}.png"
+            Image.fromarray(img).save(png)
+            views.append({"tag": tag, "V": V, "K": K,
+                          "eye": eye.tolist(), "png": str(png)})
 
     # Topdown
     V, K, eye = build_camera(center, 0.0, TOPDOWN_PITCH, distance,
@@ -336,19 +350,21 @@ def main():
         sys.exit("[fatal] 0 splats survived voting — bbox or pad too tight?")
 
     # Save
-    out_ply = obj / "5_bookshelf_sweep.ply"
+    out_ply = obj / f"{out_name}.ply"
     PlyData([PlyElement.describe(v.data[keep], "vertex")],
             text=False).write(str(out_ply))
     print(f"[save] {out_ply}")
 
     # Canonical 5
-    renders_dir = obj / "renders" / "5_bookshelf_sweep"
+    renders_dir = obj / "renders" / out_name
     render_canonical_5(out_ply, renders_dir)
     print(f"[render] canonical 5 → {renders_dir}")
 
     # Report
     (diag / "report.json").write_text(json.dumps({
-        "stage": "5_bookshelf_sweep",
+        "stage": out_name,
+        "src_ply_name": args.src_ply,
+        "pitches": sweep_pitches,
         "src_ply": str(src_ply),
         "n_total": n_total,
         "n_kept": n_kept,

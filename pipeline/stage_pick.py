@@ -45,12 +45,13 @@ ITERATION_DIR = Path(__file__).resolve().parent
 
 
 CANDIDATE_PLYS = [
-    ("floor_drop",      "3_floor_drop.ply"),       # table chain final
-    ("sam_tight",       "4_sam_tight.ply"),
-    ("sam_tight_low",   "4b_sam_tight_low.ply"),
-    ("bookshelf_sweep", "5_bookshelf_sweep.ply"),  # bookshelf chain final
-    ("sweep_fallback",  "5_sweep_fallback.ply"),
-    ("inside_outside",  "6_inside_outside.ply"),
+    ("floor_drop",          "3_floor_drop.ply"),       # table chain final
+    ("sam_tight",           "4_sam_tight.ply"),
+    ("sam_tight_low",       "4b_sam_tight_low.ply"),
+    ("bookshelf_sweep",     "5_bookshelf_sweep.ply"),  # bookshelf chain final (high pitch)
+    ("bookshelf_sweep_low", "5b_bookshelf_sweep_low.ply"),  # 2026-05-22 second pass at low pitches
+    ("sweep_fallback",      "5_sweep_fallback.ply"),
+    ("inside_outside",      "6_inside_outside.ply"),
 ]
 # 2026-05-20: Qwen-pick across stages parked. Visual comparison across
 # differently-framed candidates was unreliable (sweep_fallback's wider

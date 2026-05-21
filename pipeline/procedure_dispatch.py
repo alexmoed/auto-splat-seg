@@ -90,6 +90,19 @@ STAGE_BOOKSHELF_SWEEP = (
                   str(s), str(o)],
     "5_bookshelf_sweep.ply",
 )
+# Second bookshelf_sweep pass at low pitches (sees up under the shelves
+# / catches the bottom plinth and base). Same Qwen-bbox-vote mechanism
+# as the main pass — just different camera elevations. Output PLY lives
+# alongside 5_bookshelf_sweep.ply so stage_pick can compare both.
+STAGE_BOOKSHELF_SWEEP_LOW = (
+    "bookshelf_sweep_low",
+    lambda s, o: [sys.executable, str(ITERATION_DIR / "bookshelf_sweep.py"),
+                  str(s), str(o),
+                  "--pitches", "0,15",
+                  "--out-name", "5b_bookshelf_sweep_low",
+                  "--src-ply", "4_sam_tight.ply"],
+    "5b_bookshelf_sweep_low.ply",
+)
 # sam_low_refine — generates the low-camera SAM masks that inside_outside
 # pools with the 4_sam_tight (high) masks for the multi-mask insideness
 # carve. NOT a standalone carve — its 4b_sam_tight_low.ply output is
@@ -424,7 +437,10 @@ BOOKSHELF_PRE_QC_STAGES = [
     STAGE_FLOOR_DROP,
     STAGE_SAM_TIGHT_BOOKSHELF,
     STAGE_BOOKSHELF_SWEEP,
-    STAGE_FINAL_PICK,       # 2026-05-20 — falls through to 5_bookshelf_sweep.ply.
+    STAGE_BOOKSHELF_SWEEP_LOW,  # 2026-05-22 — second pass at low pitches
+                                 # (same Qwen-bbox-vote mechanism as
+                                 # bookshelf_sweep, just from below).
+    STAGE_FINAL_PICK,       # picks best from available stage outputs.
 ]
 
 
