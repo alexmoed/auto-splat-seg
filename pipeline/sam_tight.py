@@ -499,9 +499,23 @@ def main():
         sys.exit("[fatal] no usable SAM masks — check the prompt or input PLY")
 
     # Step C: vote and write sam_tight.ply
-    print(f"\n[C] voting at min_views_frac={args.min_views_frac}...")
+    # When the prompt has many terms (cabinet + items-on-top like TV/speakers),
+    # every view fires SOME mask and the union mask denominator stays high.
+    # The body term often hits fewer views than the items-on-top, so it can't
+    # clear a 0.7 threshold even when its hits are legitimate. Scale down
+    # min_views_frac with prompt count so 5-term prompts vote at ~0.4
+    # (which preserves the body) instead of 0.7 (which kills it).
+    n_prompts = len(prompts)
+    if n_prompts >= 3:
+        scaled_frac = max(0.4, args.min_views_frac - 0.10 * (n_prompts - 2))
+        print(f"[C] {n_prompts}-term prompt → scaling min_views_frac "
+              f"{args.min_views_frac:.2f} → {scaled_frac:.2f}")
+        eff_frac = scaled_frac
+    else:
+        eff_frac = args.min_views_frac
+    print(f"\n[C] voting at min_views_frac={eff_frac:.2f}...")
     keep, n_kept, n_in, required, n_views, v = vote_carve(
-        in_ply, masks_info, args.min_views_frac)
+        in_ply, masks_info, eff_frac)
     print(f"[vote] required ≥{required}/{n_views} votes")
     print(f"[vote] kept {n_kept:,} / {n_in:,} ({100*n_kept/n_in:.1f}%)")
 

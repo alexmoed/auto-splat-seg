@@ -120,24 +120,20 @@ def qwen_pick(candidates, label, pipe_union):
         f"Each numbered candidate shows the SAME extracted '{label}'. "
         f"The pipe-union the upstream SAM step used was:\n\n"
         f"  {pipe_union}\n\n"
-        f"PRIMARY GOAL: pick the CLEANEST candidate — the one with the "
-        f"LEAST floor halo, LEAST wisps around the object, LEAST smear "
-        f"or contamination under or beside the object, TIGHTEST silhouette "
-        f"against the white background. A bigger, fuller-looking "
-        f"silhouette is NOT better if it has more halo or wisps — halo "
-        f"and wisps are contamination, not the object.\n\n"
-        f"GUARDRAIL: among the cleanest candidates, REJECT any where:\n"
-        f"- The main body of the '{label}' has a visible carved-out gap "
-        f"or chunk missing\n"
-        f"- A sub-item from the pipe-union (lamp, picture frame, plant, "
-        f"bowl, vase, dried flowers, hardware) is COMPLETELY MISSING from "
-        f"the image\n"
-        f"- A leg is completely gone or detached with a visible floating "
-        f"gap\n\n"
-        f"Slightly thinner supports, slightly thinner sub-items, slightly "
-        f"smaller silhouette — ALL ACCEPTABLE. Halo / wisps / smear / "
-        f"floor contamination — NOT ACCEPTABLE. When in doubt, PICK THE "
-        f"CLEANER ONE.\n\n"
+        f"Pick the candidate that looks best overall, balancing two things:\n\n"
+        f"- CLEAN: less floor halo, less wisps, less smear around the object, "
+        f"tighter silhouette against the white background.\n"
+        f"- INTACT: the '{label}' looks whole — no visible holes or "
+        f"carved-out chunks in the main body, no missing legs, no missing "
+        f"sub-items from the pipe-union.\n\n"
+        f"Weigh both. A candidate with some mild halo but a fully intact "
+        f"object is usually better than a candidate that looks clean but "
+        f"has a chunk missing from the body or a leg gone. On the other "
+        f"hand, a candidate that's slightly less halo-y is preferable when "
+        f"both are intact. Use your judgment.\n\n"
+        f"Slightly thinner supports, slight edge wisps, slightly fewer "
+        f"detail splats — those are minor. Visible holes in the solid body "
+        f"or completely-missing parts are the things to weight against.\n\n"
         f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
         f"No other text."})
 
@@ -209,17 +205,46 @@ def main():
             except Exception:
                 pass
 
-    # Pick via hardcoded preference order (Qwen pick parked 2026-05-20).
+    # Pick: when both sam_tight and inside_outside exist, ask Qwen to
+    # compare their y0 renders and choose the cleanest. inside_outside is
+    # the "most processed" stage but for compound objects (cabinet + items
+    # on top) it can slice the body in half because the body's insideness
+    # scores sit right on the chosen threshold. sam_tight often preserves
+    # the whole assembly with mild floor halo. Let Qwen judge visually.
+    # Falls back to hardcoded preference order when only one is present.
     by_tag = {c["tag"]: c for c in cands}
     chosen = None
-    for tag in PREFERRED_ORDER:
-        if tag in by_tag:
-            chosen = by_tag[tag]
-            break
+    if "sam_tight" in by_tag and "inside_outside" in by_tag:
+        pick_cands = []
+        for tag in ("sam_tight", "inside_outside"):
+            c = by_tag[tag]
+            render = obj / "renders" / tag / "y0.png"
+            if not render.exists():
+                # Render falls back if a stage skipped renders
+                tmp = obj / "diagnostics" / f"stage_pick_y0_{tag}.png"
+                render_y0(c["ply"], tmp)
+                render = tmp
+            pick_cands.append({"tag": tag, "render": render, "ply": c["ply"],
+                               "n_splats": c["n_splats"]})
+        try:
+            pick_idx, raw = qwen_pick(pick_cands, label, pipe_union)
+            chosen = by_tag[pick_cands[pick_idx]["tag"]]
+            print(f"[pick] qwen compared sam_tight vs inside_outside → "
+                  f"{chosen['tag']} ({chosen['n_splats']:,} splats)  "
+                  f"raw='{raw}'")
+        except Exception as e:
+            print(f"[pick] qwen comparison failed ({e}) — falling back "
+                  f"to hardcoded order")
+            chosen = None
     if chosen is None:
-        chosen = cands[0]  # shouldn't happen — cands is non-empty
-    print(f"[pick] hardcoded order picked: {chosen['tag']} "
-          f"({chosen['n_splats']:,} splats)")
+        for tag in PREFERRED_ORDER:
+            if tag in by_tag:
+                chosen = by_tag[tag]
+                break
+        if chosen is None:
+            chosen = cands[0]
+        print(f"[pick] hardcoded order picked: {chosen['tag']} "
+              f"({chosen['n_splats']:,} splats)")
 
     # Copy to 7_final.ply
     final_path = obj / "7_final.ply"

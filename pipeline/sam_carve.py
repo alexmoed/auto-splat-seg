@@ -593,15 +593,16 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"by chairs, the target is the TABLE — a chair is a neighbor, "
         f"not a re-naming. Refine the label of the centered object; "
         f"don't swap it for a neighbor.\n\n"
-        f"What COUNTS as part of the target:\n"
+        f"What COUNTS as part of the target (INCLUDE every one of these):\n"
         f"  - The target object itself (the '{label}')\n"
-        f"  - Items SITTING ON it (pillows on a sofa, books on a table, "
-        f"speakers on a cabinet)\n"
+        f"  - ANY item SITTING ON it: pillows, books, vases, bowls, plants, "
+        f"TVs, monitors, flat-screens, speakers, soundbars, set-top boxes, "
+        f"game consoles, cable boxes, table lamps, picture frames, decor.\n"
         f"  - Items DRAPED OVER it (throw blanket on a sofa)\n"
         f"  - Items ATTACHED to it (legs, hardware, frame)\n\n"
         f"What DOES NOT count (treat as neighbor, exclude):\n"
         f"  - Furniture next to it (coffee table next to sofa, chair next to table)\n"
-        f"  - Lamps standing on the floor or on a different surface\n"
+        f"  - Floor lamps standing on the floor (not on the target)\n"
         f"  - Objects on the floor near it\n"
         f"  - Walls, floor, rug behind/under it\n\n"
         f"Build a pipe-union SAM3 prompt with THREE categories, in order:\n\n"
@@ -609,8 +610,18 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f"label is '{label}'. You SHOULD refine this name if you can describe "
         f"the target object more accurately (e.g. 'green tufted chesterfield "
         f"sofa' instead of just 'green sofa', 'round walnut coffee table' "
-        f"instead of 'wooden coffee table'). The refined name should still "
-        f"refer to the SAME physical object — don't substitute a neighbor.\n\n"
+        f"instead of 'wooden coffee table').\n"
+        f"   ⚠️ CRITICAL: Pick a STRUCTURAL/MATERIAL noun (cabinet, "
+        f"sideboard, credenza, console, wooden stand, dresser, hutch, "
+        f"buffet, bookshelf, shelving unit, end table, side table) NOT a "
+        f"FUNCTIONAL noun (tv stand, media console, computer desk, gaming "
+        f"setup). SAM3 is open-vocabulary and will literally look for "
+        f"whatever you name. 'tv stand' makes SAM see the whole "
+        f"cabinet+TV+speakers assembly and miss the wooden body. 'wooden "
+        f"sideboard' makes SAM see only the wood and gives clean masks. "
+        f"Same physical object, very different segmentation result.\n"
+        f"   The refined name should still refer to the SAME physical "
+        f"object — don't substitute a neighbor.\n\n"
         f"2. SUB-ITEMS — items resting ON / draped OVER / attached TO the "
         f"target only. Pillows, throws, blankets, cushions, books, decor "
         f"sitting on the target's top surface. If nothing on top, skip.\n"
@@ -643,13 +654,13 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
         f'- target=beige armchair: beige armchair {{soft}}|striped pillow {{soft}}|brown throw blanket {{soft}}|wooden chair legs {{hard}}\n'
         f'- target=wooden coffee table: wooden coffee table top {{hard}}|thin wooden table legs {{hard}}\n'
         f'- target=green sofa: green sofa {{soft}}|orange pillow {{soft}}|gray throw {{soft}}\n'
-        f'- target=wooden sideboard with a lamp + plant on top: wooden sideboard {{hard}}|table lamp {{hard}}|lamp shade {{soft}}|lamp base {{hard}}|potted plant {{hard}}|flower pot {{hard}}|picture frame {{hard}}|wooden sideboard legs {{hard}}\n'
-        f'- target=wooden tv stand: wooden tv stand {{hard}}|wooden tv stand legs {{hard}}\n\n'
-        f"In the last example, even if a TV and speakers are visible ON "
-        f"the cabinet, they would only be included if you judge they are "
-        f"physically resting on the target's top surface (which speakers "
-        f"and a TV typically are — include them). A coffee table NEXT TO "
-        f"the cabinet would NOT be included.\n\n"
+        f'- target=wooden sideboard with a vase + framed photo on top: wooden sideboard {{hard}}|vase {{hard}}|picture frame {{hard}}|wooden sideboard legs {{hard}}\n'
+        f'- target=wooden cabinet with TV + speakers + remote on top (labeled "desk" or "tv stand" by inventory): wooden cabinet {{hard}}|black flat-screen tv {{hard}}|black speakers {{hard}}|remote control {{hard}}|wooden cabinet legs {{hard}}\n\n'
+        f"In the last example, the MAIN noun is 'wooden cabinet' (structural, "
+        f"not 'tv stand') so SAM3 finds the wood body cleanly. The TV, "
+        f"speakers, and remote are listed as ADDITIONAL pipe-union terms "
+        f"so they get masked too — the union mask covers cabinet + TV + "
+        f"speakers + remote, and the whole assembly survives the vote.\n\n"
         f"Output ONLY the pipe-union string with tags. No commentary, no "
         f"markdown, no quotes, no JSON, no explanation.")
         content.append({"type": "text", "text": rich_text})
@@ -680,16 +691,30 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
             f"of terms:\n"
             f"  1. The main object (refine the name if you can: 'tufted "
             f"chesterfield sofa' instead of 'sofa').\n"
-            f"  2. SMALL ITEMS resting on its top surface (book on table, "
-            f"pillow on sofa, cup on table). Name each as a single term; "
-            f"DO NOT decompose into parts. If nothing on top, skip.\n"
+            f"     ⚠️ CRITICAL: Pick a STRUCTURAL/MATERIAL noun (cabinet, "
+            f"sideboard, credenza, console, wooden stand, dresser, hutch, "
+            f"buffet, bookshelf, end table) NOT a FUNCTIONAL noun (tv "
+            f"stand, media console, computer desk). SAM3 literally hunts "
+            f"for the noun you give it. 'tv stand' makes it see the "
+            f"whole cabinet+TV+speakers assembly and miss the wooden "
+            f"body. 'wooden cabinet' makes it see only the wood. Same "
+            f"object, very different masks.\n"
+            f"  2. EVERY item resting on / sitting on / draped over the "
+            f"target's top surface — INCLUDE all of them as their own "
+            f"pipe-union terms so the union mask covers the full assembly. "
+            f"This means: pillows, books, vases, plants, TVs, monitors, "
+            f"speakers, soundbars, set-top boxes, game consoles, cable "
+            f"boxes, table lamps, picture frames, cups, decor — anything "
+            f"physically resting on the target. Name each as a single "
+            f"term; DO NOT decompose into parts. If nothing on top, skip.\n"
             f"  3. The target's OWN structural pieces (its legs, base, "
             f"pedestal) — ONLY if clearly visible and not hidden by a "
             f"skirt. NOT legs of a neighboring chair.\n\n"
-            f"Strict exclusions: NO chairs around a dining table, NO "
-            f"cushions on those chairs, NO floor lamps next to a sofa, "
-            f"NO neighboring furniture. If you see a chair around the "
-            f"target table, the chair is NOT part of the target.\n\n"
+            f"Strict exclusions:\n"
+            f"  - NO chairs around a dining table, NO cushions on those "
+            f"chairs, NO floor lamps standing on the floor next to a sofa, "
+            f"NO neighboring furniture.\n"
+            f"  - NO walls, NO floor, NO rug behind/under the target.\n\n"
             f"Append a class tag to each term: '{{soft}}' for "
             f"upholstered/fabric, '{{hard}}' for rigid.\n\n"
             f"Output format:\n"
@@ -698,7 +723,9 @@ def step2_derive_sam_prompt(scene_dir: Path, obj_dir: Path):
             f'- target=light wood dining table: light wood dining table {{hard}}|small potted plant {{hard}}|bowl of fruit {{hard}}|wooden mug {{hard}}|wooden table legs {{hard}}\n'
             f'- target=wooden coffee table: wooden coffee table {{hard}}|small decorative items on table {{hard}}|wooden table legs {{hard}}\n'
             f'- target=grey armchair: grey armchair {{soft}}|striped pillow {{soft}}|wooden chair legs {{hard}}\n'
-            f'- target=green sofa: green sofa {{soft}}|orange pillow {{soft}}|gray throw {{soft}}\n\n'
+            f'- target=green sofa: green sofa {{soft}}|orange pillow {{soft}}|gray throw {{soft}}\n'
+            f'- target=wooden cabinet with TV + speakers on top (inventory may have called this a "desk" or "tv stand"): wooden cabinet {{hard}}|black flat-screen tv {{hard}}|black speakers {{hard}}|wooden cabinet legs {{hard}}\n'
+            f'  (Main noun is structural "wooden cabinet" so SAM finds the wood. TV + speakers added as additional terms so they get masked too — full assembly survives.)\n\n'
             f"Output ONLY the pipe-union string with tags. No commentary, "
             f"no markdown, no quotes, no JSON, no explanation."
         )
@@ -1318,11 +1345,26 @@ def step4_vote_carve(scene_dir: Path, obj_dir: Path):
         vals = mask_d[yi[good].clip(0, H - 1), xi[good].clip(0, W - 1)]
         votes[good[vals > 0]] += 1
 
-    required = int(math.ceil(MIN_VIEWS_FRAC * n_views))
+    # Scale min_views_frac down when the pipe-union has many terms:
+    # adding TV/speakers/etc. terms keeps more views in play (every view
+    # masks SOMETHING) and raises the vote threshold, killing the body
+    # whose hits stay constant. Scale: 1-2 terms → 0.6 (default),
+    # each extra term subtracts 0.10, floor at 0.40.
+    prompt_path = diag / "sam_prompt.txt"
+    n_prompts = 1
+    if prompt_path.exists():
+        n_prompts = len([t for t in prompt_path.read_text().split("|") if t.strip()])
+    if n_prompts >= 3:
+        eff_frac = max(0.40, MIN_VIEWS_FRAC - 0.10 * (n_prompts - 2))
+        print(f"[step4] {n_prompts}-term prompt → scaling min_views_frac "
+              f"{MIN_VIEWS_FRAC:.2f} → {eff_frac:.2f}")
+    else:
+        eff_frac = MIN_VIEWS_FRAC
+    required = int(math.ceil(eff_frac * n_views))
     keep = (valid >= required) & (votes >= required)
     n_kept = int(keep.sum())
     print(f"[step4] required ≥{required}/{n_views} votes "
-          f"(min_views_frac={MIN_VIEWS_FRAC})")
+          f"(min_views_frac={eff_frac:.2f})")
     print(f"[step4] kept {n_kept:,} / {len(xyz):,}")
 
     out_ply = obj_dir / "2_sam_wide.ply"

@@ -132,9 +132,22 @@ def main():
         }, indent=2))
         return
 
-    print(f"\n[B] voting at min_views_frac={args.min_views_frac}...")
+    # Same prompt-count-aware vote-frac scaling as sam_tight.py.
+    # When the pipe-union has many terms (cabinet + TV + speakers + ...),
+    # every view masks SOMETHING (the items-on-top), keeping the
+    # denominator high while the body's hits stay constant. Scale down
+    # min_views_frac so the body can survive: 1-2 terms keep 0.7 default,
+    # each extra term -0.10, floor at 0.40.
+    n_prompts = len(prompts)
+    if n_prompts >= 3:
+        eff_frac = max(0.40, args.min_views_frac - 0.10 * (n_prompts - 2))
+        print(f"[B] {n_prompts}-term prompt → scaling min_views_frac "
+              f"{args.min_views_frac:.2f} → {eff_frac:.2f}")
+    else:
+        eff_frac = args.min_views_frac
+    print(f"\n[B] voting at min_views_frac={eff_frac:.2f}...")
     keep, n_kept, n_in, required, n_views, v = vote_carve(
-        in_ply, masks_info, args.min_views_frac)
+        in_ply, masks_info, eff_frac)
     print(f"[vote] required >={required}/{n_views}  kept {n_kept:,}/{n_in:,} "
           f"({100*n_kept/n_in:.1f}%)")
 
