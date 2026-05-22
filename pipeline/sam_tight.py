@@ -331,10 +331,19 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
         H_img = int(cam["height"])
 
         # Crop to Qwen bbox so SAM only sees parent-object region.
+        # STOOLS: skip the crop entirely. The per-view Qwen bbox boxes
+        # the seat at steep down-pitch and the crop bottom lands at the
+        # seat's lower edge, slicing the legs off before SAM ever sees
+        # them. A stool is small and isolated, so full-frame SAM is
+        # safe. Scoped to stools only — every other object keeps the
+        # crop behaviour unchanged.
         sam_input_path = img_path
         crop_x0 = crop_y0 = 0
         crop_w, crop_h = W_img, H_img
-        if parent_label:
+        is_stool = bool(parent_label) and "stool" in parent_label.lower()
+        if is_stool:
+            print(f"  [{tag}] stool — skipping crop, full-frame SAM")
+        if parent_label and not is_stool:
             bbox_norm = qwen_view_bbox(img_path, parent_label)
             if bbox_norm is None:
                 if qwen_miss == "full_frame":
