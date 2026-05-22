@@ -91,45 +91,6 @@ def main():
         return 1
     print(f"[scan] {len(obj_dirs)} object dirs")
 
-    # ── reject pass ──────────────────────────────────────────────────
-    # The keep/reject verdict is folded into info.py's final Qwen call
-    # (info.json["condition"]). The retired qc_reject.py used to judge
-    # mid-chain off 4_sam_tight and could bury a good object on an
-    # upstream bug; now the call happens once, here, on the picked
-    # 7_final result — after the object got its full chain + stage_pick.
-    # "reject" = totally torn up / unrecognizable; small clipped parts
-    # are fine. Reject-flagged dirs move to rejects/, the rest go on to
-    # be renamed.
-    rejects_root = scene / "rejects"
-    kept = []
-    for od in obj_dirs:
-        cond, reason = "good", ""
-        info_p = od / "info.json"
-        if info_p.exists():
-            try:
-                _i = json.load(open(info_p))
-                cond = (str(_i.get("condition", "good")).strip().lower()
-                        or "good")
-                reason = _i.get("condition_reason", "")
-            except Exception:
-                cond = "good"
-        if cond == "reject":
-            dest = rejects_root / od.name
-            i = 2
-            while dest.exists():
-                dest = rejects_root / f"{od.name}_{i}"
-                i += 1
-            print(f"  [reject] {od.name} → rejects/{dest.name}  ({reason})")
-            if not args.dry_run:
-                rejects_root.mkdir(exist_ok=True)
-                od.rename(dest)
-            continue
-        kept.append(od)
-    obj_dirs = kept
-    if not obj_dirs:
-        print("[done] all object dirs rejected — nothing to rename")
-        return 0
-
     # Track every slug that will exist after renames so concurrent
     # collisions (e.g. 3 framed prints all wanting the same base slug)
     # each get a unique suffix.

@@ -306,12 +306,14 @@ def _post_extract_qc(scene: Path, obj_dir: Path, status: dict,
          REFINEMENT on top of SAM, dropping off-axis neighbours SAM
          kept). When sam_tight failed, it sources from 3_floor_drop
          (acts as recovery, rebuilding from the pre-SAM stage).
-      2. info on the latest stage.
+      2. QC GATE — qc_reject.py lenient PASS/REJECT on the PICKED
+         7_final. PASS continues; REJECT (only absolute trash) ->
+         <scene>/rejects/, discarded.
+      3. info — name + describe (only when the gate PASSed).
 
-    No reject judgment here anymore — qc_reject.py is retired. The
-    keep/reject call is folded into info.py's final Qwen pass
-    (info.json["condition"]) and acted on by rename_to_qwen.py at the
-    very end, so an object is only judged on its picked 7_final result.
+    The gate runs ONCE, after stage_pick, on the final picked result —
+    never mid-chain, so an upstream bug can't bury a good object before
+    it gets its full chain. stage_pick is independent and untouched.
 
     `allow_sweep_fallback=False` for procedures whose output the
     sweep_fallback can't recover (e.g. rugs — sweep_fallback sources
@@ -335,14 +337,18 @@ def _post_extract_qc(scene: Path, obj_dir: Path, status: dict,
         if rc != 0 and not has_main_output:
             return status
 
+    # QC GATE — lenient PASS/REJECT on the PICKED 7_final result.
+    # stage_pick already chose the best candidate; this judges whether
+    # that best is keepable. PASS -> name + describe. REJECT (only
+    # absolute trash — noise / unrecognizable) -> <scene>/rejects/,
+    # stop (no naming). Never runs mid-chain.
+    verdict, rc = _run_qc(scene, obj_dir, no_move=True)
+    status["qc_gate"] = verdict if rc == 0 else f"fail({rc})"
+    if verdict == "REJECT":
+        _move_to_rejects(scene, obj_dir, status)
+        return status
+
     _run_info(scene, obj_dir, status, "info")
-    # Reject judgment is RETIRED from here (was qc_reject.py running
-    # mid-chain off 4_sam_tight — it could bury a good object on an
-    # upstream bug, e.g. the floor-lamp framing clip). The keep/reject
-    # call now happens ONCE, at the very end: info.py folds a tolerant
-    # `condition` verdict into its final Qwen call (on the picked
-    # 7_final), and rename_to_qwen.py moves any reject-flagged folder
-    # to rejects/. Every object keeps its full chain + stage_pick.
     return status
 
 

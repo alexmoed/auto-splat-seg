@@ -45,13 +45,12 @@ VIEWS = ["y0", "y90", "y180", "y270", "topdown"]
 
 # Stage preference order — pick the latest stage that has all 5 renders.
 STAGE_PREFERENCE = [
+    # 7_final = stage_pick's chosen best. This gate runs AFTER stage_pick,
+    # so 7_final exists and is what we judge — the picked result.
     # 5_subtracted = parent with children carved out (group/subtract).
     # 5_bookshelf_sweep / 4_rug = class-specific finals.
-    # 4_sam_tight = canonical SAM-vote output (preferred over sweep_fallback
-    # which is the safety net).
-    # 5_sweep_fallback exists for every object as automatic safety; it's
-    # only inspected here if sam_tight has been renamed to
-    # 4_sam_tight_rejected.ply by the dispatcher's REJECT-recovery path.
+    # The rest are earlier stages, only reached if 7_final is absent.
+    "7_final",
     "5_subtracted",
     "5_bookshelf_sweep",
     "4_rug",
@@ -140,21 +139,25 @@ def main():
         f"You are looking at 5 canonical renders (y0, y90, y180, y270, "
         f"topdown) of an extracted gaussian-splat object. The inventory "
         f"label says this should be: '{label}'.\n\n"
-        f"Decide if the extraction is keepable.\n\n"
-        f"Be LENIENT on quality. Imperfections, missing chunks, halo "
-        f"bleed, partial fragments, blurry surfaces, asymmetric leaves, "
-        f"and minor noise are all FINE — return PASS for those as long "
-        f"as you can still tell it's a '{label}'.\n\n"
-        f"Reject in either of these cases:\n"
-        f"  1. NOISE / EMPTY: views are mostly white space with only a "
-        f"few scattered specks or no recognizable shape at all across "
-        f"the 5 views combined.\n"
-        f"  2. WRONG OBJECT: the views show a clearly different object "
-        f"than '{label}' (e.g. label says 'potted plant' but the views "
-        f"show a fabric drape, a cushion, a chair arm, etc.). The shape "
-        f"and colors must be plausibly consistent with a '{label}'. "
-        f"Don't reject for minor stylistic mismatches — only reject if "
-        f"the object class is obviously wrong.\n\n"
+        f"Decide if the extraction is keepable: PASS or REJECT.\n\n"
+        f"Be LENIENT — the goal is to catch ONLY absolute trash. It "
+        f"will not be perfect every time, and that is fine: a rough or "
+        f"imperfect extraction that is still recognizable should be "
+        f"KEPT. Imperfections, missing chunks, halo bleed, partial "
+        f"fragments, blurry surfaces, asymmetric leaves, minor noise, "
+        f"and SMALL CLIPPED PARTS (a cut-off leg, a missing corner, a "
+        f"clipped edge) are ALL FINE — return PASS for those as long "
+        f"as you can still tell it's a '{label}'. Thin objects (lamps, "
+        f"poles) look like slivers from the side and a dot from above "
+        f"— that is normal, judge by the views where the object reads "
+        f"clearly. When uncertain, return PASS.\n\n"
+        f"Return REJECT ONLY when the extraction is genuinely unusable:\n"
+        f"  1. NOISE / EMPTY: mostly white space with a few scattered "
+        f"specks or smears, no recognizable object across the 5 views "
+        f"combined.\n"
+        f"  2. WRONG OBJECT: the views clearly show a different object "
+        f"CLASS than '{label}'. Only reject for an obviously-wrong "
+        f"class — never for stylistic or colour mismatches.\n\n"
         f"Reply in JSON with these exact fields:\n"
         f'  - verdict: "PASS" or "REJECT"\n'
         f"  - reason: one short sentence explaining the call (cite which "
@@ -212,7 +215,7 @@ def main():
         print(f"[qc_reject] DONE — verdict=REJECT but --no-move; folder kept "
               f"in place for caller to handle")
     else:
-        print(f"[qc_reject] DONE — kept")
+        print(f"[qc_reject] DONE — verdict=PASS, kept")
 
 
 if __name__ == "__main__":
