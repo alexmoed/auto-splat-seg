@@ -207,7 +207,16 @@ def main():
         f"object and prominent sub-objects (e.g. [\"warm beige\", "
         f'"walnut brown", "matte black", "muted sage green"]). Use '
         f"specific descriptive color names, not just \"brown\".\n\n"
-        f"Output ONLY a single JSON object with these six fields. No "
+        f"  7. condition: \"good\" or \"reject\". Return \"good\" if the "
+        f"object is recognizable as a coherent piece of furniture or "
+        f"decor — small clipped parts, a missing leg or corner, minor "
+        f"floaters or faint halo are ALL FINE and still count as "
+        f"\"good\". Return \"reject\" ONLY when the extraction is "
+        f"totally torn up: unrecognizable noise, smeared fragments, no "
+        f"discernible object. When in doubt, return \"good\".\n\n"
+        f"  8. condition_reason: one short sentence explaining the "
+        f"condition verdict.\n\n"
+        f"Output ONLY a single JSON object with these eight fields. No "
         f"prose, no markdown fences, no commentary."})
     r = client.chat.completions.create(
         model=QWEN_MODEL,
@@ -230,6 +239,11 @@ def main():
         "style": parsed.get("style", ""),
         "materials": parsed.get("materials", []),
         "colors": parsed.get("colors", []),
+        # condition verdict — folded in from the retired qc_reject.py.
+        # Default "good": a missing/omitted verdict must NOT reject.
+        "condition": (str(parsed.get("condition", "good")).strip().lower()
+                      or "good"),
+        "condition_reason": parsed.get("condition_reason", ""),
     }
     out = obj / "info.json"
     out.write_text(json.dumps(info, indent=2))

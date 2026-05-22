@@ -306,11 +306,12 @@ def _post_extract_qc(scene: Path, obj_dir: Path, status: dict,
          REFINEMENT on top of SAM, dropping off-axis neighbours SAM
          kept). When sam_tight failed, it sources from 3_floor_drop
          (acts as recovery, rebuilding from the pre-SAM stage).
-      2. info + qc on the canonical (sam_tight) stage.
-      3. If qc REJECTs: rename 4_sam_tight.ply → 4_sam_tight_rejected.ply
-         so info/qc fall through to 5_sweep_fallback.ply, then re-run
-         info + qc on the safety PLY.
-      4. If both REJECT: move folder to <scene>/rejects/.
+      2. info on the latest stage.
+
+    No reject judgment here anymore — qc_reject.py is retired. The
+    keep/reject call is folded into info.py's final Qwen pass
+    (info.json["condition"]) and acted on by rename_to_qwen.py at the
+    very end, so an object is only judged on its picked 7_final result.
 
     `allow_sweep_fallback=False` for procedures whose output the
     sweep_fallback can't recover (e.g. rugs — sweep_fallback sources
@@ -335,47 +336,13 @@ def _post_extract_qc(scene: Path, obj_dir: Path, status: dict,
             return status
 
     _run_info(scene, obj_dir, status, "info")
-
-    verdict1, rc1 = _run_qc(scene, obj_dir, no_move=True)
-    status["qc_reject"] = "ok" if rc1 == 0 else f"fail({rc1})"
-    if rc1 != 0 or verdict1 != "REJECT":
-        return status
-
-    # First QC said REJECT — sam_tight produced a bad result. The
-    # safety sweep we already ran was sourced from 4_sam_tight (a
-    # refinement OF the bad result), so it's also bad. Re-run
-    # sweep_fallback sourcing from 3_floor_drop instead — that
-    # rebuilds the object from the pre-SAM stage and ignores the
-    # bad SAM mask entirely.
-    main_ply = obj_dir / "4_sam_tight.ply"
-    safety_ply = obj_dir / "5_sweep_fallback.ply"
-    floor_ply = obj_dir / "3_floor_drop.ply"
-    if main_ply.exists() and floor_ply.exists():
-        print("  [swap] qc REJECTED 4_sam_tight → re-running sweep_fallback "
-              "from 3_floor_drop, then renaming so info/qc inspect it")
-        # Delete the refinement-from-sam_tight sweep; rebuild from floor_drop.
-        if safety_ply.exists():
-            safety_ply.unlink()
-        rc_resweep = _run_sweep_fallback(scene, obj_dir,
-                                           source_stage="3_floor_drop")
-        status["sweep_fallback_recovery"] = "ok" if rc_resweep == 0 else f"fail({rc_resweep})"
-        if rc_resweep != 0 or not safety_ply.exists():
-            _move_to_rejects(scene, obj_dir, status)
-            return status
-        # Rename main so the new safety PLY becomes the canonical stage.
-        rejected_ply = obj_dir / "4_sam_tight_rejected.ply"
-        if rejected_ply.exists():
-            rejected_ply.unlink()
-        main_ply.rename(rejected_ply)
-        status["sam_tight_rejected_renamed"] = "ok"
-        _run_info(scene, obj_dir, status, "info_post_fallback")
-        verdict2, rc2 = _run_qc(scene, obj_dir, no_move=True)
-        status["qc_reject_post_fallback"] = "ok" if rc2 == 0 else f"fail({rc2})"
-        if verdict2 != "REJECT":
-            return status
-
-    # Still REJECT (or no safety PLY available). Move out.
-    _move_to_rejects(scene, obj_dir, status)
+    # Reject judgment is RETIRED from here (was qc_reject.py running
+    # mid-chain off 4_sam_tight — it could bury a good object on an
+    # upstream bug, e.g. the floor-lamp framing clip). The keep/reject
+    # call now happens ONCE, at the very end: info.py folds a tolerant
+    # `condition` verdict into its final Qwen call (on the picked
+    # 7_final), and rename_to_qwen.py moves any reject-flagged folder
+    # to rejects/. Every object keeps its full chain + stage_pick.
     return status
 
 
