@@ -558,8 +558,12 @@ def decide_procedure(label: str) -> str:
     # furniture-that-holds-a-TV (stand / console / cabinet / unit / table).
     if TV_PATTERN.search(lo) and not TV_EXCLUDE.search(lo):
         return "tv"
-    if BOOKSHELF_PATTERN.search(lo):
-        return "bookshelf"
+    # Bookshelf route RETIRED from auto-routing 2026-05-22 — the general
+    # route extracts bookshelves at least as cleanly (validated on the
+    # light-wood + tall metal-frame bookshelves) and keeps the pipeline
+    # simpler. The bookshelf procedure is still defined and reachable via
+    # an explicit `--procedure bookshelf` (kept for website renders).
+    # BOOKSHELF_PATTERN is left in place for that manual path.
     if RUG_PATTERN.search(lo):
         return "rug"
     if TABLE_PATTERN.search(lo) and not TABLE_EXCLUDE.search(lo):
