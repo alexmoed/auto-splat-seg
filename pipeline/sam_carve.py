@@ -344,9 +344,38 @@ def step1_render_views(scene_dir: Path, obj_dir: Path):
     center = np.median(means, axis=0).astype(np.float32)
     p5  = np.percentile(means, 5,  axis=0)
     p95 = np.percentile(means, 95, axis=0)
-    extent = float((p95 - p5).max())
+    span = p95 - p5
+    # FLOOR LAMP ONLY (label-gated 2026-05-22): a floor lamp is tall and
+    # thin, and splat-dense at the shade — the median y sits well above
+    # the true vertical middle and p5/p95 discards the shade, so the
+    # camera aims high and clips the shade off the top of the frame.
+    # For the Y AXIS ONLY, use the true min/max so the target is the
+    # real vertical centre and the frame is sized to the full height.
+    # x/z keep median + p5/p95 (genuine far-outlier rejection — phase-3
+    # hulls carry stray splats metres away). No effect on any other
+    # object class.
+    label = ""
+    meta_p = obj_dir / "1_visual_hull_meta.json"
+    if meta_p.exists():
+        try:
+            label = (json.load(open(meta_p)).get("label") or "").lower()
+        except Exception:
+            label = ""
+    if "floor lamp" in label:
+        y_min = float(means[:, 1].min())
+        y_max = float(means[:, 1].max())
+        center[1] = np.float32((y_min + y_max) / 2.0)
+        span[1] = y_max - y_min
+        print(f"[frame] floor-lamp — true-y centring: "
+              f"y_centre={center[1]:.2f} y_span={span[1]:.2f}")
+    extent = float(span.max())
     tan_half = math.tan(math.radians(FOV) / 2)
-    distance = (extent * RENDER_MARGIN) / (2 * tan_half)
+    # FLOOR LAMP ONLY: the default 2.0 margin makes a tall thin lamp fill
+    # only ~half the frame (lots of white space — "looks far"). Use a
+    # tighter 1.4 so the lamp fills the frame; 1.4 still clears the p-45
+    # tilt (the lamp's 3D diagonal is well inside extent*1.4).
+    margin = 1.4 if "floor lamp" in label else RENDER_MARGIN
+    distance = (extent * margin) / (2 * tan_half)
     print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
           f"dist={distance:.2f}m margin={RENDER_MARGIN}")
 
