@@ -29,6 +29,8 @@ ITERATION_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ITERATION_DIR))
 
 OBJECT_STAGE_PREFERENCE = [
+    "7_final",                 # stage_pick output — the picked best
+    "6_inside_outside",        # multi-mask final stage
     "5_subtracted",
     "5_bookshelf_sweep",
     "4_rug",
