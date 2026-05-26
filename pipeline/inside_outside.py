@@ -204,8 +204,25 @@ def qwen_pick(candidates, label, pipe_union=""):
     return pick
 
 
-def carve(raw, s, thr):
-    return s >= thr
+def carve(raw, s, thr, y_band_bottom_pct=None, y=None):
+    """True = keep splat.
+
+    If y_band_bottom_pct is set, ONLY splats in the bottom N% of the
+    object's y-range (real-world bottom = larger y in y-down) are subject
+    to the insideness threshold. Splats in the upper (100 - N)% are
+    always kept. Use this when the upper structure of the object has
+    sparse interior content (open shelving, ladder racks) that the
+    insideness vote would wrongly carve.
+    """
+    keep_base = s >= thr
+    if y_band_bottom_pct is None or y is None:
+        return keep_base
+    y_min, y_max = float(np.min(y)), float(np.max(y))
+    # y-down: bottom in real space = larger y. Bottom N% of y-range
+    # starts at y_min + (1 - N/100) * (y_max - y_min).
+    y_cut = y_min + (1.0 - y_band_bottom_pct / 100.0) * (y_max - y_min)
+    in_upper = y < y_cut          # smaller y = higher in real space = upper part
+    return keep_base | in_upper
 
 
 # ----------------------------------------------------------------------
@@ -222,6 +239,12 @@ def main():
     ap.add_argument("--in-ply", type=Path, default=None)
     ap.add_argument("--mask-dir", type=Path, default=None)
     ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--y-band-bottom-pct", type=float, default=None,
+                    help="If set, only carve splats in the bottom N% of "
+                         "the y-range (real-world bottom). The upper "
+                         "(100-N)% is preserved unconditionally. Useful "
+                         "for shelving where the insideness vote eats "
+                         "interior contents.")
     args = ap.parse_args()
     obj = args.obj_dir.resolve()
     out_root = (args.out_dir.resolve() if args.out_dir else obj)
@@ -332,7 +355,7 @@ def main():
         def evaluate(thr_list, tag):
             cands = []
             for t in thr_list:
-                keep = carve(raw, s, t)
+                keep = carve(raw, s, t, args.y_band_bottom_pct, xyz[:, 1])
                 d = sweep_root / f"{tag}_{t:.2f}"
                 d.mkdir(parents=True, exist_ok=True)
                 pth = d / "cand.ply"
@@ -361,7 +384,7 @@ def main():
         thresh = args.keep_thresh
 
     # --- final carve ---
-    keep = carve(raw, s, thresh)
+    keep = carve(raw, s, thresh, args.y_band_bottom_pct, xyz[:, 1])
     n_kept = int(keep.sum())
     print(f"[inside_outside] insideness: <0.3={int((s<0.3).sum())}  "
           f"0.3-0.7={int(((s>=0.3)&(s<=0.7)).sum())}  >0.7={int((s>0.7).sum())}")

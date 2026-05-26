@@ -1,0 +1,89 @@
+{
+  "common": {
+    "up": [
+      0,
+      -1,
+      0
+    ],
+    "fov": 50,
+    "width": 1080,
+    "height": 1080
+  },
+  "objects": {
+    "grey_armchair": {
+      "scene": "Kitchen_living_dining_v27",
+      "object_ply": "02_beige_upholstered_armchair_with_wooden_legs/7_final.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [
+        -1.7346,
+        0.41473,
+        0.20701
+      ],
+      "target": [
+        -1.72542,
+        0.45,
+        0.30256
+      ]
+    },
+    "wooden_sideboard": {
+      "scene": "Kitchen_living_dining_v27",
+      "object_ply": "02_light_wood_sideboard/6_inside_outside.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [
+        -1.53331,
+        0.44782,
+        0.52237
+      ],
+      "target": [
+        -2.05834,
+        0.85118,
+        -1.15307
+      ]
+    },
+    "wooden_coffee_table": {
+      "scene": "Kitchen_living_dining_v27",
+      "object_ply": "02_light_oak_coffee_table_with_black_metal_frame/7_final.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [
+        -4.51,
+        -0.37,
+        2.434
+      ],
+      "target": [
+        -3.807,
+        1.581,
+        0.621
+      ]
+    },
+    "light_wood_bookshelf": {
+      "scene": "Kitchen_living_dining_v27",
+      "object_ply": "02_light_wood_bookshelf/7_final.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [
+        -1.758,
+        0.203,
+        1.669
+      ],
+      "target": [
+        -4.47,
+        1.029,
+        0.295
+      ]
+    },
+    "beige_sectional_sofa": {
+      "scene": "Kitchen_living_dining_v27",
+      "object_ply": "02_beige_sectional_sofa/7_final.ply",
+      "background_ply": "step7_cardinal_aligned.ply",
+      "eye": [
+        -1.758,
+        0.203,
+        1.669
+      ],
+      "target": [
+        -4.47,
+        1.029,
+        0.295
+      ]
+    }
+  }
+}

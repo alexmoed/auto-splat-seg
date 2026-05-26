@@ -34,6 +34,10 @@ Per-object side-by-sides + camera specs:
 [wooden_sideboard](docs/showcase/wipe/wooden_sideboard_pair.png) ·
 [cameras.json](docs/showcase/wipe/cameras.json).
 
+The latest scene set (v27, May 2026) lives in
+[docs/showcase/wipe/v27/](docs/showcase/wipe/v27/) with cameras locked
+per object.
+
 Regenerate the grid with `python pipeline/build_showcase.py`.
 
 ## How it works
@@ -44,23 +48,48 @@ Regenerate the grid with `python pipeline/build_showcase.py`.
 2. **Inventory (Qwen)** — multi-pass disjoint-category prompts on the
    topdown + 4 cross-cut quadrant dioramas. Returns labeled pixel
    bboxes.
-3. **Per-object extraction** — for each bbox: back-project to a
-   visual-hull seed → 4-view SAM3 wide carve → floor-drop with
-   Qwen-judged threshold sweep → 4-view SAM3 tight refine → optional
-   bbox-sweep fallback if the tight carve fails QC. Specialty
-   procedures for thin items (TV pitch-sweep, wall art 8-yaw + 8-pitch
+3. **Per-object carve** — for each bbox:
+   1. **Visual hull** — back-project the bbox cone to seed a coarse
+      crop of the splat (Stage 1).
+   2. **Loose mask** — render 4–24 yaws around the hull, run SAM3 on
+      each, vote-carve splats that fall outside the union of masks
+      (Stage 2 `sam_wide`).
+   3. **Floor drop** — RANSAC floor plane + Qwen-judged threshold sweep
+      removes the floor splats under the object (Stage 3 `floor_drop`).
+   4. **Tight mask (two pitch rings)** — re-render at the canonical
+      high-pitch yaws + a low-pitch ring, run SAM3 again with a
+      narrower vote-frac (Stages 4 `sam_tight` + 4b `sam_tight_low`).
+   5. **Sweep fallback** — if the tight carve fails QC, a bbox-sweep
+      around the visual hull recovers the object via Qwen-bbox vote
+      across 24 views (Stage 5).
+   6. **Inside / outside cleanup** — pool every binary SAM mask from
+      the tight pass, re-project each surviving splat into every
+      camera, and compute an *insideness score* (votes_inside ÷
+      cameras_visible). Three keep-thresholds (`0.30` / `0.45` /
+      `0.60`) are rendered side-by-side; Qwen picks the cleanest
+      (Stage 6 `inside_outside`).
+   7. **Stage pick + QC gate** — Qwen compares the candidate stage
+      PLYs (3_floor_drop / 4_sam_tight / 4b_sam_tight_low /
+      5_sweep_fallback / 5_bookshelf_sweep / 6_inside_outside) and
+      writes the winner as `7_final.ply`. A final PASS/REJECT QC gate
+      drops extractions that don't contain a coherent object (Stage 7
+      `stage_pick` + `qc_reject`).
+
+   Specialty procedures for thin items (TV pitch-sweep, bookshelf
+   72-yaw sweep + low-pitch second pass, wall art 8-yaw + 8-pitch
    vote).
+
 4. **Companions** — after parent extracts (TV / bookshelf / sideboard),
    re-prompt Qwen for small items sitting on them (soundbar, remote,
-   books, vases).
+   books, vases) and extract each as a child object.
 5. **Background subtract + reassemble** — KDTree-match each object PLY
    against the rotated full scan, drop matched splats, ship the
    surviving splats as the background. Reassemble for visual QC.
 
 Driver: `pipeline/run_all.py`. Per-stage scripts run independently
 too (`extract_one.py`, `sam_carve.py`, `floor_drop.py`, `sam_tight.py`,
-etc.). See `pipeline/PIPELINE_ORDER.md` for the authoritative
-ordering.
+`inside_outside.py`, `stage_pick.py`, …). See
+`pipeline/PIPELINE_ORDER.md` for the authoritative ordering.
 
 ## Requirements
 
@@ -140,13 +169,18 @@ The scene directory after a run contains:
 │   ├── 1_visual_hull.ply
 │   ├── 2_sam_wide.ply
 │   ├── 3_floor_drop.ply
-│   ├── 4_sam_tight.ply
-│   ├── 5_sweep_fallback.ply         # or 5_subtracted.ply
+│   ├── 4_sam_tight.ply               # high-pitch ring
+│   ├── 4b_sam_tight_low.ply          # low-pitch ring
+│   ├── 5_sweep_fallback.ply          # or 5_bookshelf_sweep / 5_subtracted
+│   ├── 6_inside_outside.ply          # multi-mask insideness carve
+│   ├── 7_final.ply                   # stage_pick winner
+│   ├── final.splat                   # packaged web-viewer format
+│   ├── info.json                     # Qwen review (name, description, materials)
 │   └── renders/<stage>/{y0,y90,y180,y270,topdown}.png
 ├── scene_background.ply
 ├── scene_reassembled.ply
 └── final_outputs/
-    ├── <slug>.splat                 # one per object
+    ├── <slug>.splat                  # one per object
     └── _background.splat
 ```
 
@@ -154,8 +188,11 @@ The scene directory after a run contains:
 
 ```
 docker/        — Dockerfile + compose + entrypoint
-pipeline/   — pipeline scripts, single-file modules
-                 (run_all.py is the orchestrator)
+pipeline/      — pipeline scripts (run_all.py is the orchestrator)
+scratch_scripts/ — one-off utilities not built into the container image
+                   (e.g. rebuild_background_open3d.py for refreshing the
+                   per-scene background after swapping object stages)
+docs/          — showcase wipe pairs + per-stage walkthrough renders
 ```
 
 `pipeline/PIPELINE_ORDER.md` is the source of truth for stage order.
