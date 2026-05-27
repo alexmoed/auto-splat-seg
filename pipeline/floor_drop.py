@@ -482,6 +482,32 @@ def main():
         label = meta.get("label", "object")
     print(f"[label] {label}")
 
+    # Bookshelves / open shelving SKIP floor_drop entirely. Their bases
+    # sit flush with the floor and the floor-band drop carves away the
+    # lowest shelf rim + decorative kick-plate. Same exemption logic as
+    # inside_outside.py (SHELVING_KEYWORDS).
+    SHELVING_KEYWORDS = ("bookshelf", "bookcase", "book shelf", "shelving",
+                         "shelf", "etagere", "etagère", "étagère")
+    label_lo = label.lower()
+    if any(k in label_lo for k in SHELVING_KEYWORDS):
+        out_ply = obj / "3_floor_drop.ply"
+        print(f"[floor_drop] SKIPPED — '{label}' is shelving/bookshelf class, "
+              f"exempt from floor RANSAC (preserves bottom shelf + kick-plate). "
+              f"Copying {in_ply.name} -> {out_ply.name}.")
+        shutil.copy(str(in_ply), str(out_ply))
+        out_renders = obj / "renders" / "3_floor_drop"
+        render_canonical_5(out_ply, out_renders)
+        diag = obj / "diagnostics" / "3_floor_drop"
+        diag.mkdir(parents=True, exist_ok=True)
+        (diag / "report.json").write_text(json.dumps({
+            "stage": "floor_drop", "skipped": True,
+            "reason": "shelving/bookshelf class exempt — preserves base shelf",
+            "label": label, "input_ply": str(in_ply),
+            "output_ply": str(out_ply),
+        }, indent=2))
+        print(f"[done] {out_ply} (passthrough — shelving exempt)")
+        return
+
     diag = obj / "diagnostics" / "3_floor_drop"
     diag.mkdir(parents=True, exist_ok=True)
     # Clear stale per-iter files from prior runs

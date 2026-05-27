@@ -254,8 +254,8 @@ def main():
     if in_ply is None:
         # same final-PLY priority as extract_final_outputs (minus stage 6)
         for cand in ("5_subtracted.ply", "5_bookshelf_sweep.ply", "4_rug.ply",
-                     "5_sweep_fallback.ply", "4b_sam_tight_low.ply",
-                     "4_sam_tight.ply"):
+                     "5_sweep_fallback.ply", "4c_sam_tight_high.ply",
+                     "4b_sam_tight_low.ply", "4_sam_tight.ply"):
             if (obj / cand).exists():
                 in_ply = obj / cand
                 break
@@ -304,7 +304,8 @@ def main():
         mask_dirs = [args.mask_dir.resolve()]
     else:
         mask_dirs = [d for d in (obj / "diagnostics" / "4_sam_tight",
-                                 obj / "diagnostics" / "4b_sam_tight_low")
+                                 obj / "diagnostics" / "4b_sam_tight_low",
+                                 obj / "diagnostics" / "4c_sam_tight_high")
                      if (d / "cameras.json").exists()]
     if not mask_dirs:
         print(f"[inside_outside] SKIPPED — no sam mask dirs under {obj} "

@@ -34,6 +34,13 @@ from pathlib import Path
 import numpy as np
 from plyfile import PlyData, PlyElement
 
+try:
+    import cupy as cp
+    _CUPY_OK = cp.cuda.runtime.getDeviceCount() > 0
+except Exception:
+    cp = None
+    _CUPY_OK = False
+
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
 
 # RENDER MARGIN — single source of truth across iteration_1 scripts.
@@ -206,11 +213,28 @@ def main():
     xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64)
     print(f"[source] {len(xyz):,} splats")
 
-    # Project
-    u, v_img, in_front = project_to_pixels(xyz, V, K)
-    inside = ((u >= padded[0]) & (u <= padded[2]) &
-              (v_img >= padded[1]) & (v_img <= padded[3]))
-    keep = in_front & inside
+    # Project via CuPy when available — millions-of-splats matmul +
+    # bbox test runs ~10-30× faster on GPU than float64 numpy.
+    xp = cp if _CUPY_OK else np
+    on_gpu = xp is cp
+    print(f"[project] backend={'cupy/gpu' if on_gpu else 'numpy/cpu'}")
+    xyz_x = xp.asarray(xyz.astype(np.float32))
+    V_x = xp.asarray(V.astype(np.float32))
+    K_x = xp.asarray(K.astype(np.float32))
+    homog = xp.concatenate(
+        [xyz_x, xp.ones((len(xyz_x), 1), dtype=xp.float32)], axis=1)
+    cam = homog @ V_x.T                    # [N, 4]
+    z = cam[:, 2]
+    in_front_x = z < 0
+    safe_z = xp.where(z < 0, -z, xp.float32(1.0))
+    u_x = K_x[0, 0] * cam[:, 0] / safe_z + K_x[0, 2]
+    v_x = K_x[1, 1] * cam[:, 1] / safe_z + K_x[1, 2]
+    inside_x = ((u_x >= padded[0]) & (u_x <= padded[2]) &
+                (v_x >= padded[1]) & (v_x <= padded[3]))
+    keep_x = in_front_x & inside_x
+    keep = cp.asnumpy(keep_x) if on_gpu else np.asarray(keep_x)
+    in_front = cp.asnumpy(in_front_x) if on_gpu else np.asarray(in_front_x)
+    inside = cp.asnumpy(inside_x) if on_gpu else np.asarray(inside_x)
     n_kept = int(keep.sum())
     print(f"[hull] in_front={int(in_front.sum()):,}  "
           f"inside_padded={int(inside.sum()):,}  kept={n_kept:,}")

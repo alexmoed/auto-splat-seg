@@ -57,6 +57,13 @@ from openai import OpenAI
 from PIL import Image
 from plyfile import PlyData, PlyElement
 
+try:
+    import cupy as cp
+    _CUPY_OK = cp.cuda.runtime.getDeviceCount() > 0
+except Exception:
+    cp = None
+    _CUPY_OK = False
+
 # Skill — OK to import.
 sys.path.insert(0, "/home/ubuntu/.claude/skills/gsplat-viewer/scripts")
 from view import load_gsplat_ply, render_splat  # noqa: E402
@@ -181,7 +188,8 @@ def crop_for_sam(img_path: Path, bbox_norm, W_img: int, H_img: int,
 MIN_VIEWS_FRAC = 0.7        # was 0.8 — too strict, killed bodies
 
 def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
-                    obj_dir: Path = None, pitches: list = None):
+                    obj_dir: Path = None, pitches: list = None,
+                    margin_mult: float = None):
     """Render the SAM views from in_ply into diag/input_<tag>.png +
     save cameras.json. Mirrors sam_carve.step1_render_views but takes
     an input PLY argument. If scene_dir is provided, applies the same
@@ -203,14 +211,34 @@ def render_25_views(in_ply: Path, diag: Path, scene_dir: Path = None,
     n_splats = len(means)
     print(f"[load] {n_splats:,} splats")
 
-    lo = means.min(axis=0)
-    hi = means.max(axis=0)
-    center = ((lo + hi) * 0.5).astype(np.float32)
-    extent = float((hi - lo).max())
+    # Robust center, full extent. Center via median (drops outlier splats
+    # of stray floor/wall captured upstream — outliers used to drag the
+    # min/max midpoint by metres and land orbit cameras off-object). But
+    # extent stays raw min/max so framing includes every splat — using
+    # p5/p95 here clips legitimate body geometry against image edges.
+    center = np.median(means, axis=0).astype(np.float32)
+    raw_lo = means.min(axis=0)
+    raw_hi = means.max(axis=0)
+    extent = float((raw_hi - raw_lo).max())
     tan_half = math.tan(math.radians(FOV) / 2)
-    distance = (extent * RENDER_MARGIN) / (2 * tan_half)
-    print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
-          f"dist={distance:.2f}m margin={RENDER_MARGIN}")
+    # Per-pass standoff multiplier on RENDER_MARGIN. Caller may pass
+    # margin_mult explicitly; otherwise default by ring: low pass
+    # (pitches >= 0) gets 1.5× (cameras look UP so object's vertical
+    # extent fills more frame), high pass falls through to 1.0×.
+    is_low_pass_for_margin = pitches is not None and all(p >= 0 for p in pitches)
+    if margin_mult is not None:
+        mult = float(margin_mult)
+    else:
+        mult = 1.5 if is_low_pass_for_margin else 1.0
+    pass_margin = RENDER_MARGIN * mult
+    distance = (extent * pass_margin) / (2 * tan_half)
+    raw_center = (raw_lo + raw_hi) * 0.5
+    p5 = np.percentile(means, 5, axis=0)
+    p95 = np.percentile(means, 95, axis=0)
+    print(f"[frame] center(median)={center.tolist()} extent(minmax)={extent:.2f}m "
+          f"dist={distance:.2f}m margin={pass_margin} (low_pass={is_low_pass_for_margin})")
+    print(f"[frame] raw_center(minmax)={raw_center.tolist()} p5p95_span={(p95-p5).tolist()} "
+          f"|shift|={float(np.linalg.norm(raw_center - center)):.3f}m")
 
     # Wall-skip gated on Qwen verdict (2026-05-20 v2): the blanket disable
     # from earlier today over-corrected — it fixed wall-adjacent tables
@@ -418,38 +446,61 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
 
 
 def vote_carve(in_ply: Path, masks_info: list, min_views_frac: float):
-    """Project in_ply splats through every saved camera; keep splats voted
-    in by ≥ceil(min_views_frac × n_views) of views. Returns (keep, n_kept,
-    n_in, required, n_views) and the new vertex data."""
+    """GPU-batched vote-carve via CuPy. Projects every splat through every
+    camera in a single batched matmul, indexes into the mask tensor, sums
+    valid/votes across views. Falls back to numpy when CuPy unavailable.
+    Identical output schema to the original numpy version."""
     pl = PlyData.read(str(in_ply))
     v = pl["vertex"]
-    xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64)
+    xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float32)
     n_in = len(xyz)
     n_views = len(masks_info)
     if n_views == 0:
         return None, 0, n_in, 0, 0, v
 
-    hp = np.concatenate([xyz, np.ones((n_in, 1))], axis=1)
-    votes = np.zeros(n_in, dtype=np.int32)
-    valid = np.zeros(n_in, dtype=np.int32)
-    for mv in masks_info:
-        V, K, mask_d = mv["V"], mv["K"], mv["mask_d"]
-        Wv, Hv = mv["W"], mv["H"]
-        cam_xyz = (hp @ V.T)[:, :3]
-        zc = -cam_xyz[:, 2]
-        in_front = zc > 0.01
-        xs = K[0, 0] * cam_xyz[:, 0] / np.maximum(zc, 1e-6) + K[0, 2]
-        ys = K[1, 1] * cam_xyz[:, 1] / np.maximum(zc, 1e-6) + K[1, 2]
-        xi = xs.astype(np.int32)
-        yi = ys.astype(np.int32)
-        in_img = in_front & (xi >= 0) & (xi < Wv) & (yi >= 0) & (yi < Hv)
-        good = np.where(in_img)[0]
-        valid[good] += 1
-        vals = mask_d[yi[good].clip(0, Hv - 1), xi[good].clip(0, Wv - 1)]
-        votes[good[vals > 0]] += 1
+    # Render dims are constant across all SAM views, but defend anyway.
+    Wv = int(masks_info[0]["W"])
+    Hv = int(masks_info[0]["H"])
+    uniform_size = all(int(mv["W"]) == Wv and int(mv["H"]) == Hv
+                       for mv in masks_info)
 
+    xp = cp if (_CUPY_OK and uniform_size) else np
+    on_gpu = xp is cp
+
+    Vs = xp.asarray(np.stack([mv["V"] for mv in masks_info])
+                    .astype(np.float32))                       # [V, 4, 4]
+    Ks = xp.asarray(np.stack([mv["K"] for mv in masks_info])
+                    .astype(np.float32))                       # [V, 3, 3]
+    masks = xp.asarray(np.stack(
+        [(mv["mask_d"] > 0).astype(np.uint8) for mv in masks_info]
+    ))                                                          # [V, H, W]
+    pts = xp.asarray(xyz)                                       # [N, 3]
+    hp = xp.concatenate([pts, xp.ones((n_in, 1), dtype=xp.float32)],
+                        axis=1)                                 # [N, 4]
+    # Batched project: cam = Vs @ hp.T → [V, 4, N] → transpose → [V, N, 4]
+    cam = xp.matmul(Vs, hp.T[None, :, :]).transpose(0, 2, 1)
+    zc = -cam[..., 2]                                           # [V, N]
+    in_front = zc > 0.01
+    z_safe = xp.maximum(zc, 1e-6)
+    fx = Ks[:, 0, 0:1]
+    fy = Ks[:, 1, 1:2]
+    cx = Ks[:, 0, 2:3]
+    cy = Ks[:, 1, 2:3]
+    xs = fx * cam[..., 0] / z_safe + cx                         # [V, N]
+    ys = fy * cam[..., 1] / z_safe + cy                         # [V, N]
+    xi = xs.astype(xp.int32)
+    yi = ys.astype(xp.int32)
+    in_img = in_front & (xi >= 0) & (xi < Wv) & (yi >= 0) & (yi < Hv)
+    xi_c = xp.clip(xi, 0, Wv - 1)
+    yi_c = xp.clip(yi, 0, Hv - 1)
+    view_idx = xp.arange(n_views)[:, None]                      # [V, 1]
+    mask_vals = masks[view_idx, yi_c, xi_c]                     # [V, N]
+    voted_per_view = in_img & (mask_vals > 0)
+    valid = in_img.sum(axis=0).astype(xp.int32)                 # [N]
+    votes = voted_per_view.sum(axis=0).astype(xp.int32)         # [N]
     required = int(math.ceil(min_views_frac * n_views))
-    keep = (valid >= required) & (votes >= required)
+    keep_x = (valid >= required) & (votes >= required)
+    keep = cp.asnumpy(keep_x) if on_gpu else np.asarray(keep_x)
     return keep, int(keep.sum()), n_in, required, n_views, v
 
 

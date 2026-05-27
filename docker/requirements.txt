@@ -13,6 +13,10 @@ plyfile==1.1.3
 scipy==1.17.1
 opencv-python-headless==4.10.0.84
 
+# GPU-accelerated numpy (used by sam_tight.vote_carve + extract_one
+# visual hull projection — drop-in numpy replacement on CUDA).
+cupy-cuda12x==14.0.1
+
 # Persistent SAM3 server (sam_server.py) — keeps the SAM weights loaded
 # once across the whole pipeline. vLLM ships its own FastAPI/uvicorn,
 # but pinning explicitly so the version doesn't surprise us.

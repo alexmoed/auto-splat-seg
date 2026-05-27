@@ -41,7 +41,8 @@ from sam_tight import (  # noqa: E402
     parse_tagged_prompts, SAM_PAD_HARD_M, SAM_PAD_FABRIC_M, MIN_VIEWS_FRAC,
 )
 
-LOW_PITCHES = [0.0, 15.0]
+LOW_PITCHES = [0.0]   # single horizontal ring — eye at chair-center
+                       # height, looking straight at the body
 TABLE_TOKENS = ("table", "desk")
 
 
