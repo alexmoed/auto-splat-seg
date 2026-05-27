@@ -482,6 +482,27 @@ def main():
         label = meta.get("label", "object")
     print(f"[label] {label}")
 
+    # Global override: FLOOR_DROP_SKIP=1 disables floor_drop for ALL
+    # classes (used by v29 A/B comparison run — pure no-floor_drop test).
+    import os
+    if os.environ.get("FLOOR_DROP_SKIP", "0") == "1":
+        out_ply = obj / "3_floor_drop.ply"
+        print(f"[floor_drop] SKIPPED — FLOOR_DROP_SKIP=1 env var set "
+              f"(global disable). Copying {in_ply.name} -> {out_ply.name}.")
+        shutil.copy(str(in_ply), str(out_ply))
+        out_renders = obj / "renders" / "3_floor_drop"
+        render_canonical_5(out_ply, out_renders)
+        diag = obj / "diagnostics" / "3_floor_drop"
+        diag.mkdir(parents=True, exist_ok=True)
+        (diag / "report.json").write_text(json.dumps({
+            "stage": "floor_drop", "skipped": True,
+            "reason": "FLOOR_DROP_SKIP=1 env var set (global)",
+            "label": label, "input_ply": str(in_ply),
+            "output_ply": str(out_ply),
+        }, indent=2))
+        print(f"[done] {out_ply} (passthrough — global skip)")
+        return
+
     # Bookshelves / open shelving SKIP floor_drop entirely. Their bases
     # sit flush with the floor and the floor-band drop carves away the
     # lowest shelf rim + decorative kick-plate. Same exemption logic as

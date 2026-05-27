@@ -65,11 +65,22 @@ fi
 
 if ! sudo docker ps --format "{{.Names}}" | grep -qx "${CONTAINER}"; then
   echo "[$(date '+%T')] starting container"
+  # Optional env-var passthrough: any host env var named in PASSTHROUGH_ENV
+  # (whitespace-separated) is forwarded into the container with -e.
+  # E.g. PASSTHROUGH_ENV="FLOOR_DROP_SKIP" FLOOR_DROP_SKIP=1 ./run_pipeline.sh ...
+  ENV_ARGS=()
+  for var in ${PASSTHROUGH_ENV:-FLOOR_DROP_SKIP}; do
+    if [[ -n "${!var:-}" ]]; then
+      ENV_ARGS+=(-e "${var}=${!var}")
+      echo "[$(date '+%T')] passing env ${var}=${!var}"
+    fi
+  done
   sudo docker run -d --name "${CONTAINER}" --gpus all --ipc=host --shm-size=16gb \
     -v /home/ubuntu/models/Qwen3.6-35B-A3B-AWQ:/models/qwen36-awq:ro \
     -v /home/ubuntu/.cache/huggingface:/root/.cache/huggingface \
     -v /home/ubuntu/.cache/torch_extensions:/root/.cache/torch_extensions \
     -v "${SCENE_DIR}:/workspace/scene" \
+    "${ENV_ARGS[@]}" \
     splat-pipeline:latest \
     sleep infinity >/dev/null
 fi

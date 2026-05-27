@@ -13,7 +13,7 @@ Pipeline:
   7. Re-render topdown
   8. Qwen yaw sweep (5 candidates at 1920×1080) — loop until Qwen picks center
   9. Preference rotation: 90° if z-extent > x-extent (longer-dim-horizontal)
-  10. Final remove_shell → final scene_after.ply
+  10. Y-vertical assertion + auto-correct (if X or Z became vertical, rotate back)
   11. Render canonical topdown
 
 Output: <scene>/01_shell_removed/scene_after.ply + floor_plane.json
@@ -47,8 +47,9 @@ TILT_CORRECT = PLUGIN / "tilt_correct.py"
 Y_AXIS_ALIGN = PLUGIN / "y_axis_align.py"
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
 
-QWEN_URL = "http://127.0.0.1:8000/v1"
-QWEN_MODEL = "qwen36-awq"
+import os as _os
+QWEN_URL = _os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
+QWEN_MODEL = _os.environ.get("QWEN_MODEL", "qwen36-awq")
 
 FOV = 70.0
 TOPDOWN_W, TOPDOWN_H = 1920, 1080
@@ -72,11 +73,16 @@ def run(cmd: list, **kw) -> subprocess.CompletedProcess:
 
 
 def detect_vertical_axis(ply_path: Path) -> str:
-    """Return 'x' / 'y' / 'z' — the axis with smallest extent (= vertical)."""
+    """Return 'x' / 'y' / 'z' — axis with smallest p15-85 extent (= vertical).
+
+    Uses percentile range, not full min-max, so dome/scatter outliers
+    (which can reach 10+ km on raw scans) don't dominate the comparison.
+    """
     pl = PlyData.read(str(ply_path))
     v = pl["vertex"].data
-    exts = {a: float(v[a].max() - v[a].min()) for a in ("x", "y", "z")}
-    print(f"[detect] extents x={exts['x']:.2f} y={exts['y']:.2f} z={exts['z']:.2f}")
+    exts = {a: float(np.percentile(v[a], 85) - np.percentile(v[a], 15))
+            for a in ("x", "y", "z")}
+    print(f"[detect] p15-85 extents x={exts['x']:.2f} y={exts['y']:.2f} z={exts['z']:.2f}")
     return min(exts, key=exts.get)
 
 
@@ -87,7 +93,7 @@ def shell_remove(in_ply: Path, scene_dir: Path) -> tuple:
     out_ply = out_dir / "scene_after.ply"
     floor_json = out_dir / "floor_plane.json"
     print(f"[shell] {in_ply.name} → scene_after.ply")
-    run(["python", str(REMOVE_SHELL), str(in_ply), str(out_ply)])
+    run([sys.executable, str(REMOVE_SHELL), str(in_ply), str(out_ply)])
     return out_ply, floor_json
 
 
@@ -110,7 +116,7 @@ def render_topdown(ply: Path, out: Path, yaw_deg: float = 0.0):
     up_x = -math.sin(rad)
     up_z = -math.cos(rad)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["python", VIEW_PY, str(ply), str(out),
+    cmd = [sys.executable, VIEW_PY, str(ply), str(out),
            f"--eye={cx:.4f},{yf - dist:.4f},{cz:.4f}",
            f"--target={cx + 0.001:.4f},{yf:.4f},{cz:.4f}",
            f"--up={up_x:.6f},0,{up_z:.6f}", "--y-down",
@@ -206,7 +212,7 @@ def main():
     if vertical in ("x", "z"):
         rotated = scene / "step1_ydown.ply"
         print(f"[1] {vertical}-up detected → rotating to y-down")
-        run(["python", str(ROTATE_ZUP), str(raw), str(rotated),
+        run([sys.executable, str(ROTATE_ZUP), str(raw), str(rotated),
              "--from-axis", vertical])
         current_ply = rotated
     chain.append({"step": "vertical_check", "vertical_axis": vertical,
@@ -223,7 +229,7 @@ def main():
     if not fp.get("orient_ok", False):
         print(f"[3] orient_ok=false → tilt_correct")
         tilted = scene / "step3_tilt_corrected.ply"
-        run(["python", str(TILT_CORRECT), str(current_ply), str(tilted),
+        run([sys.executable, str(TILT_CORRECT), str(current_ply), str(tilted),
              "--plane", str(floor_json)])
         current_ply = tilted
         scene_after, floor_json = shell_remove(current_ply, scene)
@@ -235,7 +241,7 @@ def main():
     # 4 — y-axis align via PCA
     print(f"[4] y_axis_align (PCA auto)")
     yaligned = scene / "step4_yaligned.ply"
-    run(["python", str(Y_AXIS_ALIGN), str(current_ply), str(yaligned)])
+    run([sys.executable, str(Y_AXIS_ALIGN), str(current_ply), str(yaligned)])
     current_ply = yaligned
     scene_after, floor_json = shell_remove(current_ply, scene)
     chain.append({"step": "y_align_pca", "current_ply": str(current_ply)})
@@ -251,7 +257,7 @@ def main():
     if abs(residual) > HOUGH_THRESH_DEG:
         print(f"[6] applying corrective rotation -{residual:.3f}°")
         rotated = scene / "step6_hough_corrected.ply"
-        run(["python", str(Y_AXIS_ALIGN), str(current_ply), str(rotated),
+        run([sys.executable, str(Y_AXIS_ALIGN), str(current_ply), str(rotated),
              "--angle-deg", f"{-residual:.4f}"])
         current_ply = rotated
         scene_after, floor_json = shell_remove(current_ply, scene)
@@ -281,7 +287,7 @@ def main():
             break
         cumulative_yaw += winner_delta
         rotated = scene / f"step7_yaw_round{attempt}.ply"
-        run(["python", str(Y_AXIS_ALIGN), str(current_ply), str(rotated),
+        run([sys.executable, str(Y_AXIS_ALIGN), str(current_ply), str(rotated),
              "--angle-deg", f"{winner_delta:.4f}"])
         current_ply = rotated
         scene_after, floor_json = shell_remove(current_ply, scene)
@@ -297,7 +303,7 @@ def main():
     if ze > xe:
         print(f"[9] z>x → applying 90° preference rotation")
         rotated = scene / "step9_pref_rotated.ply"
-        run(["python", str(Y_AXIS_ALIGN), str(current_ply), str(rotated),
+        run([sys.executable, str(Y_AXIS_ALIGN), str(current_ply), str(rotated),
              "--angle-deg", "90.0"])
         current_ply = rotated
         scene_after, floor_json = shell_remove(current_ply, scene)
@@ -306,6 +312,55 @@ def main():
     else:
         chain.append({"step": "preference_rotation", "skipped": True,
                       "x_ext": xe, "z_ext": ze})
+
+    # 10 — Y-vertical assertion + auto-correct (locked 2026-05-27).
+    # After every rotation in the chain, Y MUST still be the smallest
+    # extent (= the world vertical axis). The Qwen yaw-sweep (step 8) and
+    # preference rotation (step 9) are non-deterministic and can leave the
+    # scene with X or Z as vertical. That breaks every downstream script
+    # (sam_carve, dioramas, floor_drop, inside_outside all hard-assume
+    # y-down) and packages raw bbox cones as "final" outputs.
+    # This step catches that and auto-rotates back to y-down.
+    def _ext(arr):
+        return float(np.percentile(arr, 85) - np.percentile(arr, 15))
+
+    pl_chk = PlyData.read(str(current_ply))
+    xe_f = _ext(np.asarray(pl_chk["vertex"]["x"]))
+    ye_f = _ext(np.asarray(pl_chk["vertex"]["y"]))
+    ze_f = _ext(np.asarray(pl_chk["vertex"]["z"]))
+    print(f"[10] final-axis check: p15-85 x={xe_f:.2f} y={ye_f:.2f} z={ze_f:.2f}")
+    extents = {"x": xe_f, "y": ye_f, "z": ze_f}
+    vertical_now = min(extents, key=extents.get)
+    if vertical_now != "y":
+        print(f"[10] WRONG — {vertical_now} is smallest (vertical), should be y. auto-correcting.")
+        corrected = scene / "step10_axis_corrected.ply"
+        run([sys.executable, str(ROTATE_ZUP), str(current_ply), str(corrected),
+             "--from-axis", vertical_now])
+        current_ply = corrected
+        scene_after, floor_json = shell_remove(current_ply, scene)
+        pl_chk = PlyData.read(str(current_ply))
+        xe_p = _ext(np.asarray(pl_chk["vertex"]["x"]))
+        ye_p = _ext(np.asarray(pl_chk["vertex"]["y"]))
+        ze_p = _ext(np.asarray(pl_chk["vertex"]["z"]))
+        print(f"[10] post-correct: x={xe_p:.2f} y={ye_p:.2f} z={ze_p:.2f}")
+        if not (ye_p < xe_p and ye_p < ze_p):
+            chain.append({"step": "y_vertical_assert", "passed": False,
+                          "before": extents,
+                          "after_correct": {"x": xe_p, "y": ye_p, "z": ze_p},
+                          "tried_rotate_from": vertical_now})
+            (scene / "orient_status.json").write_text(json.dumps(
+                {"chain": chain, "fatal": "axis-correction failed"}, indent=2))
+            sys.exit(f"[FATAL] orient axis-correction failed. After rotating "
+                     f"from {vertical_now}-up to y-down, y={ye_p:.2f}m is still "
+                     f"not the smallest extent (x={xe_p:.2f}, z={ze_p:.2f}). "
+                     f"Manual intervention required.")
+        chain.append({"step": "y_vertical_assert", "passed": True,
+                      "auto_corrected_from": vertical_now,
+                      "before": extents,
+                      "after_correct": {"x": xe_p, "y": ye_p, "z": ze_p}})
+    else:
+        chain.append({"step": "y_vertical_assert", "passed": True,
+                      "auto_corrected_from": None, "extents": extents})
 
     # 11 — final canonical topdown render
     render_topdown(scene_after, topdown)

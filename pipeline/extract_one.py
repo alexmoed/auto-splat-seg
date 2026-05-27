@@ -317,7 +317,9 @@ def main():
         "n_splats_kept": n_kept,
         "n_splats_total": len(xyz),
     }
-    (out_dir / "1_visual_hull_meta.json").write_text(json.dumps(meta, indent=2))
+    (out_dir / "1_visual_hull_meta.json").write_text(json.dumps(
+        meta, indent=2,
+        default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o)))
 
     # Qwen wall-adjacency check — build a wider hull at +10% per side
     # (vs the tight 4% working hull), render 4 views, ask Qwen one yes/no.

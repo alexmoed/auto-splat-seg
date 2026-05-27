@@ -36,8 +36,9 @@ from plyfile import PlyData, PlyElement
 PLUGIN = Path("/home/ubuntu/.claude/local-plugins-marketplace/plugins/pointcloud-segmentation/scripts")
 Y_AXIS_ALIGN = PLUGIN / "y_axis_align.py"
 VIEW_PY = "/home/ubuntu/.claude/skills/gsplat-viewer/scripts/view.py"
-QWEN_URL = "http://127.0.0.1:8000/v1"
-QWEN_MODEL = "qwen36-awq"
+import os as _os
+QWEN_URL = _os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1")
+QWEN_MODEL = _os.environ.get("QWEN_MODEL", "qwen36-awq")
 
 FOV = 70.0
 W, H = 1920, 1080
