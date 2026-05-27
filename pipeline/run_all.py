@@ -133,6 +133,14 @@ def run_extract_one_per_item(scene_dir: Path):
     SHELVING_KEYWORDS = ("bookshelf", "bookcase", "book shelf",
                          "shelving", "shelf", "etagere", "etagère",
                          "étagère")
+    # LARGE tables (dining / kitchen / desk / writing) have legs that
+    # splay outward beyond the table-top footprint. 4% pad crops the
+    # legs. Use 15%. Cap top-extend at 0.3m so we don't pull in
+    # chandeliers above the table and blow up SAM input framing.
+    # SMALL tables (coffee, side, console) are flat/accessible — they
+    # extract clean at the default 4%, so exclude from this rule.
+    TABLE_KEYWORDS = ("dining table", "kitchen table",
+                      "writing table", "desk")
     failures = []
     skipped = 0
     for i, it in enumerate(items):
@@ -148,6 +156,7 @@ def run_extract_one_per_item(scene_dir: Path):
             except Exception:
                 pass
         is_shelving = any(kw in label.lower() for kw in SHELVING_KEYWORDS)
+        is_table = any(kw in label.lower() for kw in TABLE_KEYWORDS)
         cmd = [sys.executable, str(ITERATION_DIR / "extract_one.py"),
                str(scene_dir), "--index", str(i)]
         if is_shelving:
@@ -157,6 +166,9 @@ def run_extract_one_per_item(scene_dir: Path):
             # don't pull in wall material behind the shelf.
             cmd.extend(["--pad-pct-long", "0.15", "--pad-pct-short", "0.04"])
             print(f"\n--- item {i}: '{label}' --- (shelving: long=15% short=4%)")
+        elif is_table:
+            cmd.extend(["--pad-pct", "0.15", "--top-extend-m", "0.3"])
+            print(f"\n--- item {i}: '{label}' --- (table: pad=15% top-extend=0.3m)")
         else:
             print(f"\n--- item {i}: '{label}' --- (pad=4%)")
         r = subprocess.run(cmd)
