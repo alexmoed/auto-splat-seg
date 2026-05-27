@@ -126,6 +126,13 @@ def run_extract_one_per_item(scene_dir: Path):
         sys.exit("[fatal] no items in qwen_items.json")
 
     print(f"\n[step 1.b] extract_one.py per item ({len(items)} items)")
+    # Shelving items (bookshelf / open shelving / etagere) often have
+    # plants / vases / tall objects sitting on top whose silhouettes
+    # extend beyond the shelf's footprint. Bump pad to 10% so the bbox
+    # cone is wide enough to capture them.
+    SHELVING_KEYWORDS = ("bookshelf", "bookcase", "book shelf",
+                         "shelving", "shelf", "etagere", "etagère",
+                         "étagère")
     failures = []
     skipped = 0
     for i, it in enumerate(items):
@@ -140,9 +147,18 @@ def run_extract_one_per_item(scene_dir: Path):
                     continue
             except Exception:
                 pass
-        print(f"\n--- item {i}: '{label}' ---")
+        is_shelving = any(kw in label.lower() for kw in SHELVING_KEYWORDS)
         cmd = [sys.executable, str(ITERATION_DIR / "extract_one.py"),
                str(scene_dir), "--index", str(i)]
+        if is_shelving:
+            # Asymmetric pad: grow the shelf's wide direction (long axis
+            # of bbox) by 15% to capture overhanging items on top.
+            # Keep narrow direction (depth, front-to-back) at 4% so we
+            # don't pull in wall material behind the shelf.
+            cmd.extend(["--pad-pct-long", "0.15", "--pad-pct-short", "0.04"])
+            print(f"\n--- item {i}: '{label}' --- (shelving: long=15% short=4%)")
+        else:
+            print(f"\n--- item {i}: '{label}' --- (pad=4%)")
         r = subprocess.run(cmd)
         if r.returncode != 0:
             print(f"[warn] extract_one.py exited {r.returncode} on item {i} ('{label}')")

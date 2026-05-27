@@ -133,7 +133,16 @@ def main():
     ap.add_argument("--index", type=int, default=None,
                     help="0-based index in qwen_items.json items[]")
     ap.add_argument("--pad-pct", type=float, default=0.04,
-                    help="fraction per side (default 0.04 = 4%%)")
+                    help="fraction per side, uniform (default 0.04 = 4%%). "
+                         "Use --pad-pct-long / --pad-pct-short for asymmetric.")
+    ap.add_argument("--pad-pct-long", type=float, default=None,
+                    help="fraction per side on the bbox's LONGER axis "
+                         "(= object's wider direction, e.g. bookshelf "
+                         "left-right). Default: --pad-pct value.")
+    ap.add_argument("--pad-pct-short", type=float, default=None,
+                    help="fraction per side on the bbox's SHORTER axis "
+                         "(= object's narrower direction, e.g. bookshelf "
+                         "front-to-back). Default: --pad-pct value.")
     ap.add_argument("--source-ply", type=Path, default=None,
                     help="default: <scene>/step7_sliced.ply "
                          "(rotated, ceiling cut)")
@@ -179,19 +188,29 @@ def main():
     if not bbox_px or len(bbox_px) != 4:
         sys.exit(f"[fatal] item has no bbox_pixels: {chosen}")
 
-    # Pad bbox 15% per side
+    # Pad bbox per side. Supports asymmetric pad (long-axis vs short-axis
+    # of the bbox) — used by shelving to grow the width direction more
+    # than the front-to-back depth.
     x0, y0, x1, y1 = bbox_px
     bw, bh = x1 - x0, y1 - y0
-    px = bw * args.pad_pct
-    py = bh * args.pad_pct
+    pad_long = args.pad_pct_long if args.pad_pct_long is not None else args.pad_pct
+    pad_short = args.pad_pct_short if args.pad_pct_short is not None else args.pad_pct
+    if bw >= bh:
+        pad_x_pct, pad_y_pct = pad_long, pad_short
+    else:
+        pad_x_pct, pad_y_pct = pad_short, pad_long
+    px = bw * pad_x_pct
+    py = bh * pad_y_pct
     padded = [
         max(0, int(x0 - px)),
         max(0, int(y0 - py)),
         min(img_w, int(x1 + px)),
         min(img_h, int(y1 + py)),
     ]
-    print(f"[bbox] tight  : {bbox_px}")
-    print(f"[bbox] padded : {padded}  (+{args.pad_pct*100:.0f}% per side)")
+    print(f"[bbox] tight  : {bbox_px}  (w={bw} h={bh})")
+    print(f"[bbox] padded : {padded}  "
+          f"(x-pad +{pad_x_pct*100:.0f}% per side, "
+          f"y-pad +{pad_y_pct*100:.0f}% per side)")
 
     # Camera
     V = viewmat_look_at(cam["eye"], cam["target"], cam["up"])
@@ -223,12 +242,12 @@ def main():
     K_x = xp.asarray(K.astype(np.float32))
     homog = xp.concatenate(
         [xyz_x, xp.ones((len(xyz_x), 1), dtype=xp.float32)], axis=1)
-    cam = homog @ V_x.T                    # [N, 4]
-    z = cam[:, 2]
+    cam_xyz = homog @ V_x.T                # [N, 4] — NOT the inventory cam dict
+    z = cam_xyz[:, 2]
     in_front_x = z < 0
     safe_z = xp.where(z < 0, -z, xp.float32(1.0))
-    u_x = K_x[0, 0] * cam[:, 0] / safe_z + K_x[0, 2]
-    v_x = K_x[1, 1] * cam[:, 1] / safe_z + K_x[1, 2]
+    u_x = K_x[0, 0] * cam_xyz[:, 0] / safe_z + K_x[0, 2]
+    v_x = K_x[1, 1] * cam_xyz[:, 1] / safe_z + K_x[1, 2]
     inside_x = ((u_x >= padded[0]) & (u_x <= padded[2]) &
                 (v_x >= padded[1]) & (v_x <= padded[3]))
     keep_x = in_front_x & inside_x

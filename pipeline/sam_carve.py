@@ -315,6 +315,9 @@ def _carve_hull_for_qwen(scene_dir: Path, obj_dir: Path, scene: dict,
         "neighbors": neighbors,
         "splats_in": n_full,
         "splats_out": n_kept,
+        "_keep_mask": keep_np,   # consumed by step 1 writer to filter the
+                                  # source PLY into a full-attribute carved
+                                  # PLY; stripped before JSON serialization.
     }
     return new_scene, audit
 
@@ -467,18 +470,19 @@ def step1_render_views(scene_dir: Path, obj_dir: Path):
         # overwrite 1_visual_hull.ply — that's the source of truth that
         # SAM step 3 + vote step 4 + downstream operate on).
         out_ply = obj_dir / "1_visual_hull_for_qwen.ply"
-        cm = carved_scene["means"].detach().cpu().numpy()
-        # Carry over scales/quats/opacities/colors via the keep mask
-        # already applied in _carve_hull_for_qwen — we need to write a
-        # PLY in the same gsplat format. The full PLY can't be reduced
-        # here without re-reading the source; just save the means as a
-        # diagnostic point cloud (Qwen never sees the PLY directly, only
-        # the renders from it).
+        # Full-attribute carved PLY: read source hull, apply keep-mask
+        # (computed inside _carve_hull_for_qwen and stored in audit),
+        # rewrite preserving every splat field. Lets downstream stages
+        # (SAM renders, vote_carve, sam_tight, ...) consume the carved
+        # hull as a real renderable splat scene.
+        keep_mask = audit["_keep_mask"]
+        src = PlyData.read(str(hull_ply))
+        v_src = src["vertex"].data
+        v_keep = v_src[keep_mask]
         from plyfile import PlyElement
-        elt = np.empty(len(cm), dtype=[('x','f4'),('y','f4'),('z','f4')])
-        elt['x'] = cm[:, 0]; elt['y'] = cm[:, 1]; elt['z'] = cm[:, 2]
-        PlyData([PlyElement.describe(elt, 'vertex')],
+        PlyData([PlyElement.describe(v_keep, "vertex")],
                 text=False).write(str(out_ply))
+        audit.pop("_keep_mask", None)  # don't serialize the mask into JSON
         audit["out_ply"] = str(out_ply)
         (obj_dir / "1_visual_hull_for_qwen_audit.json").write_text(
             json.dumps(audit, indent=2))
@@ -915,6 +919,11 @@ def _sam_pass_on_views(cam_data, prompts, sam_pad):
     for cam in cam_data["cameras"]:
         tag = cam["tag"]
         img_path = Path(cam["png"])
+        # Prefer carved-hull render (neighbors removed) so SAM can't latch
+        # onto residual neighbor splats. Falls through when no neighbors carved.
+        qwen_alt = img_path.parent / f"input_qwen_{tag}.png"
+        if qwen_alt.exists():
+            img_path = qwen_alt
         K = np.array(cam["K"])
         eye = np.array(cam["eye"])
         target = np.array(cam["target"])
@@ -1326,13 +1335,17 @@ def step4_vote_carve(scene_dir: Path, obj_dir: Path):
         sys.exit(f"[fatal] missing {cam_json_path}\n  run --step 1 first")
     cam_data = json.load(open(cam_json_path))
 
-    hull_ply = obj_dir / "1_visual_hull.ply"
+    # Prefer carved hull (neighbors removed) so vote-carve can't keep
+    # splats that belong to neighbor objects we already extracted.
+    hull_ply = obj_dir / "1_visual_hull_for_qwen.ply"
+    if not hull_ply.exists():
+        hull_ply = obj_dir / "1_visual_hull.ply"
     if not hull_ply.exists():
         sys.exit(f"[fatal] missing {hull_ply}")
     pl = PlyData.read(str(hull_ply))
     v = pl["vertex"]
     xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64)
-    print(f"[step4] visual_hull: {len(xyz):,} splats")
+    print(f"[step4] visual_hull: {len(xyz):,} splats (source: {hull_ply.name})")
 
     masks_info = []
     for cam in cam_data["cameras"]:

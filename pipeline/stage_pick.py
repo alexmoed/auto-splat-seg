@@ -281,23 +281,19 @@ def main():
         size_mb = splat_path.stat().st_size / 1024 / 1024
         print(f"[splat] {splat_path}  ({size_mb:.1f} MB)")
 
-    # Rename folder to the refined slug if it differs from current.
-    # NEVER overwrite — suffix _2/_3 on collision. The chain is done by
-    # this point so it's safe to move the whole folder.
+    # Write refined slug to a marker file. procedure_dispatch reads this
+    # AFTER qc_gate + info + split_children finish, and does the actual
+    # folder rename there. Renaming here used to break those downstream
+    # steps because the obj_dir Path they held went stale (2026-05-27 fix).
     new_slug = slugify(label)
-    current_slug = obj.name[3:] if obj.name.startswith("02_") else obj.name
-    if new_slug != current_slug and new_slug != "object":
-        base_target = obj.parent / f"02_{new_slug}"
-        target = base_target
-        n = 2
-        while target.exists():
-            target = obj.parent / f"02_{new_slug}_{n}"
-            n += 1
-        print(f"\n[rename] {obj.name} → {target.name}")
-        obj.rename(target)
-        print(f"[rename] new path: {target}")
-    else:
-        print(f"\n[rename] slug unchanged ('{current_slug}') — no rename")
+    (obj / "stage_pick_refined_slug.json").write_text(json.dumps({
+        "label": label,
+        "refined_slug": new_slug,
+        "current_slug": obj.name[3:] if obj.name.startswith("02_") else obj.name,
+        "rename_pending": new_slug not in ("object",) and
+                          new_slug != (obj.name[3:] if obj.name.startswith("02_") else obj.name),
+    }, indent=2))
+    print(f"\n[rename] deferred to procedure_dispatch (refined_slug='{new_slug}')")
 
     print(f"\n[done] picked: {chosen['tag']} → 7_final.ply + final.splat")
 

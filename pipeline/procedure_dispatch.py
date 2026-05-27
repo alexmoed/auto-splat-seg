@@ -7,8 +7,13 @@ chain of EXISTING scripts. Does NOT copy/fork sam_carve.py etc. — the
 real algorithms stay shared; only the orchestration differs per class.
 
 Procedures:
-  general   — sam_carve (4 sub-steps) → floor_drop → sam_tight → info
-              The default flow validated on the armchair.
+  general   — sam_carve (4 sub-steps) → sam_tight (A center) →
+              sam_low_refine (B low) → sam_high_refine (C steep) →
+              sweep_fallback → inside_outside → stage_pick → info.
+              floor_drop RETIRED 2026-05-27 — sam_tight sources
+              2_sam_wide.ply directly. The geometric floor band drop
+              was eating soft-furniture skirts; the SAM chain handles
+              floor isolation now.
   tv        — pitch-sweep SAM (no floor_drop, TVs aren't on the floor).
               NOT YET IMPLEMENTED — stub.
   bookshelf — face-on sam_carve variant (clutter-aware).
@@ -65,6 +70,19 @@ STAGE_FLOOR_DROP = (
                   str(s), str(o)],
     "3_floor_drop.ply",
 )
+# 2026-05-27 — floor_drop RE-ADDED to general chain but in NEW POSITION:
+# AFTER sam_tight (Pass A center), BEFORE sam_low (Pass B). Sources
+# 4_sam_tight.ply, writes 4a_floor_drop.ply. The RANSAC plane fit + band
+# carve trims floor halo around the base before the steep-camera SAM
+# passes get to see it, so they don't have to vote against it.
+STAGE_FLOOR_DROP_AFTER_TIGHT = (
+    "floor_drop_after_tight",
+    lambda s, o: [sys.executable, str(ITERATION_DIR / "floor_drop.py"),
+                  str(s), str(o),
+                  "--src-ply", "4_sam_tight.ply",
+                  "--out-stage-name", "4a_floor_drop"],
+    "4a_floor_drop.ply",
+)
 STAGE_SAM_TIGHT_FROM_FLOOR = (
     "sam_tight",
     lambda s, o: [sys.executable, str(ITERATION_DIR / "sam_tight.py"),
@@ -117,6 +135,18 @@ STAGE_SAM_LOW_REFINE = (
     "diagnostics/4b_sam_tight_low/cameras.json",
     True,  # optional — failures don't halt the chain
 )
+# sam_high_refine — Pass C, steep high cameras (pitches -60/-75/-89).
+# Reads 4b_sam_tight_low.ply if present else 4_sam_tight.ply, carves at
+# steep elevation where floor / tabletop neighbours silhouette cleanly
+# against the object body. Writes 4c_sam_tight_high.ply + masks dir.
+# Optional — chains gracefully if input absent.
+STAGE_SAM_HIGH_REFINE = (
+    "sam_high_refine",
+    lambda s, o: [sys.executable, str(ITERATION_DIR / "sam_high_refine.py"),
+                  str(s), str(o)],
+    "4c_sam_tight_high.ply",
+    True,  # optional
+)
 # sweep_fallback — Qwen-bbox vote refinement on top of 4_sam_tight.
 # MUST run BEFORE inside_outside so 5_sweep_fallback.ply exists as the
 # input to inside_outside (priority above 4b_sam_tight_low). This is
@@ -149,6 +179,17 @@ STAGE_FINAL_PICK = (
     lambda s, o: [sys.executable, str(ITERATION_DIR / "stage_pick.py"),
                   str(o)],
     "7_final.ply",
+)
+# Drop big+dark Gaussian splat streaks (one axis blew up, color collapsed
+# ~black). Locked 2026-05-27 after light_wood_bookshelf had visible black
+# vertical smears in the front view. Rewrites 7_final.ply in place when
+# it finds streaks; no-op otherwise. Optional — no streaks ≠ failure.
+STAGE_DESTREAK = (
+    "splat_destreak",
+    lambda s, o: [sys.executable, str(ITERATION_DIR / "splat_destreak.py"),
+                  str(o)],
+    "diagnostics/8_destreak/report.json",
+    True,  # optional — no streaks means no report, that's fine
 )
 STAGE_INFO = (
     "info",
@@ -206,12 +247,18 @@ def _run_chain(scene: Path, obj_dir: Path, stages: list) -> dict:
 GENERAL_PRE_QC_STAGES = [
     STAGE_SAM_CARVE_S1, STAGE_SAM_CARVE_S2,
     STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
-    STAGE_FLOOR_DROP,
-    STAGE_SAM_TIGHT_FROM_FLOOR,
-    STAGE_SWEEP_FALLBACK,   # 2026-05-20 — must run BEFORE inside_outside (provides 5_sweep_fallback.ply as input).
-    STAGE_SAM_LOW_REFINE,   # 2026-05-20 — low-cam sweep; its masks feed inside_outside (optional).
-    STAGE_INSIDE_OUTSIDE,   # 2026-05-20 — multi-mask carve.
-    STAGE_FINAL_PICK,       # 2026-05-20 — Qwen picks cleanest stage → final.ply.
+    # floor_drop MOVED 2026-05-27 from the position before sam_tight to
+    # the position AFTER sam_tight. sam_tight now sources 2_sam_wide.ply
+    # (via fallback), and floor_drop runs on its output to carve floor
+    # halo before the steep-camera SAM passes see it.
+    STAGE_SAM_TIGHT_FROM_FLOOR,    # Pass A center, sources 2_sam_wide.ply
+    STAGE_FLOOR_DROP_AFTER_TIGHT,  # RANSAC on 4_sam_tight → 4a_floor_drop
+    STAGE_SAM_LOW_REFINE,          # Pass B low — reads 4a_floor_drop (fallback 4_sam_tight)
+    STAGE_SAM_HIGH_REFINE,         # Pass C steep — reads 4b_sam_tight_low (chains via low)
+    STAGE_SWEEP_FALLBACK,          # Qwen-bbox vote refinement on top of 4_sam_tight
+    STAGE_INSIDE_OUTSIDE,          # multi-mask insideness carve
+    STAGE_FINAL_PICK,              # Qwen picks cleanest stage → 7_final.ply
+    STAGE_DESTREAK,                # drop big+dark streak splats from 7_final.ply (2026-05-27)
 ]
 
 # Table chain — same as general but STOPS at 3_floor_drop.
@@ -282,6 +329,41 @@ def _run_sweep_fallback(scene: Path, obj_dir: Path,
     return subprocess.run([sys.executable, str(ITERATION_DIR / "sweep_fallback.py"),
                            str(scene), str(obj_dir),
                            "--source-stage", source_stage]).returncode
+
+
+def _apply_deferred_rename(obj_dir: Path) -> Path:
+    """Read stage_pick_refined_slug.json (if stage_pick wrote one) and
+    rename obj_dir to 02_<refined_slug> with _2/_3 suffix on collision.
+    Returns the new path (or obj_dir unchanged if no rename pending).
+
+    Lives here, not in stage_pick.py, so qc_gate + info + split_children
+    can run against the original path before the rename takes effect.
+    """
+    if not obj_dir.exists():
+        return obj_dir
+    marker = obj_dir / "stage_pick_refined_slug.json"
+    if not marker.exists():
+        return obj_dir
+    try:
+        info = json.load(open(marker))
+    except Exception:
+        return obj_dir
+    if not info.get("rename_pending"):
+        print(f"[rename] slug unchanged ('{info.get('current_slug', '?')}') — no rename")
+        return obj_dir
+    new_slug = info.get("refined_slug", "object")
+    if new_slug in (None, "", "object"):
+        return obj_dir
+    base_target = obj_dir.parent / f"02_{new_slug}"
+    target = base_target
+    n = 2
+    while target.exists():
+        target = obj_dir.parent / f"02_{new_slug}_{n}"
+        n += 1
+    print(f"[rename] {obj_dir.name} → {target.name}")
+    obj_dir.rename(target)
+    print(f"[rename] new path: {target}")
+    return target
 
 
 def _run_info(scene: Path, obj_dir: Path, status: dict, key: str) -> int:
@@ -407,13 +489,14 @@ def run_tv(scene: Path, obj_dir: Path) -> dict:
 BOOKSHELF_PRE_QC_STAGES = [
     STAGE_SAM_CARVE_S1, STAGE_SAM_CARVE_S2,
     STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
-    STAGE_FLOOR_DROP,
+    # STAGE_FLOOR_DROP RETIRED 2026-05-27 — same reason as general chain.
     STAGE_SAM_TIGHT_BOOKSHELF,
     STAGE_BOOKSHELF_SWEEP,
     STAGE_BOOKSHELF_SWEEP_LOW,  # 2026-05-22 — second pass at low pitches
                                  # (same Qwen-bbox-vote mechanism as
                                  # bookshelf_sweep, just from below).
     STAGE_FINAL_PICK,       # picks best from available stage outputs.
+    STAGE_DESTREAK,         # drop big+dark streak splats from 7_final.ply (2026-05-27)
 ]
 
 
@@ -575,7 +658,16 @@ def main():
 
     fn = PROCEDURES[procedure]
     status = fn(scene, obj)
-    print(f"[dispatch] DONE  {obj.name}  status={status}")
+
+    # Apply deferred rename from stage_pick (2026-05-27 fix — was
+    # originally inside stage_pick.py but ran before qc_gate + info +
+    # split_children, breaking their obj_dir Path). Now runs as the last
+    # step of dispatch so all downstream stages see the original path.
+    obj_final = _apply_deferred_rename(obj)
+    if obj_final != obj:
+        status["renamed_to"] = obj_final.name
+
+    print(f"[dispatch] DONE  {obj_final.name}  status={status}")
 
     # Persist procedure choice into meta so subsequent runs know
     if meta_path.exists():

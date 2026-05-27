@@ -58,11 +58,16 @@ def main():
     scene = args.scene_dir.resolve()
     obj = args.obj_dir.resolve()
 
-    in_ply = obj / "4_sam_tight.ply"
+    # 2026-05-27 — floor_drop reinserted between sam_tight and sam_low.
+    # Prefer 4a_floor_drop.ply (RANSAC-carved) when present, fall back to
+    # 4_sam_tight.ply for legacy chains where floor_drop didn't run.
+    in_ply = obj / "4a_floor_drop.ply"
+    if not in_ply.exists():
+        in_ply = obj / "4_sam_tight.ply"
     out_ply = obj / "4b_sam_tight_low.ply"
     if not in_ply.exists():
-        print(f"[sam_low_refine] SKIPPED — no {in_ply.name} (Pass A did not "
-              f"produce a sam_tight result); nothing to refine.")
+        print(f"[sam_low_refine] SKIPPED — no 4a_floor_drop.ply or "
+              f"4_sam_tight.ply in {obj}; nothing to refine.")
         return
 
     prompt_path = obj / "diagnostics" / "2_sam_wide" / "sam_prompt.txt"

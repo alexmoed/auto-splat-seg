@@ -445,6 +445,77 @@ def sam_each_view(diag: Path, prompts: list, prompt_pads: dict,
     return masks_info, per_prompt_hits
 
 
+# 3-candidate effective vote-frac sweep for --auto mode (2026-05-27).
+# After 7-prompt scaling the lowest snaps to 0.40; the others give the
+# usual ladder. Picked by Qwen via the inside_outside-style prompt.
+SAM_TIGHT_AUTO_SWEEP_EFF = [0.40, 0.60, 0.80]
+QWEN_AUTO_URL = "http://127.0.0.1:8000/v1"
+QWEN_AUTO_MODEL = "qwen36-awq"
+
+
+def _encode_b64_for_qwen(p, max_dim=1024):
+    """Inline base64 encoder for the sam_tight --auto Qwen pick."""
+    img = Image.open(p).convert("RGB")
+    s = max_dim / max(img.size)
+    if s < 1.0:
+        img = img.resize((int(img.size[0] * s), int(img.size[1] * s)))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _qwen_pick_vote_frac(candidates, label, pipe_union):
+    """Mirror inside_outside.qwen_pick prompt structure: each candidate
+    shows the SAME extraction at increasing strength; pick highest-strength
+    one that doesn't erode body or sub-items. candidates: list of
+    {frac, frac_kept, renders:[y0,y180]}.
+    """
+    import urllib.request
+    content = []
+    for i, c in enumerate(candidates):
+        content.append({"type": "text",
+                        "text": f"\n--- CANDIDATE {i+1} "
+                                f"(vote-frac {c['frac']:.2f}, "
+                                f"keeps {100*c['frac_kept']:.1f}%) ---"})
+        for rp in c["renders"]:
+            content.append({"type": "image_url", "image_url": {
+                "url": f"data:image/png;base64,{_encode_b64_for_qwen(rp)}"}})
+    content.append({"type": "text", "text":
+        f"Each numbered candidate shows the SAME extracted '{label}', "
+        f"cleaned by SAM vote at an increasing strength. The pipe-union "
+        f"the upstream SAM step used was:\n\n  {pipe_union}\n\n"
+        f"The MAIN object is '{label}'. Sub-items in the pipe-union "
+        f"(pillows, items-on-top, hardware, decor) must be preserved.\n\n"
+        f"Anything else — floor halo, wall behind, neighbor furniture "
+        f"bleed, capture noise — is contamination this step removes. "
+        f"Higher strength removes more contamination but eventually "
+        f"starts eroding the object.\n\n"
+        f"**DISQUALIFY** any candidate where the body or any sub-item is "
+        f"eroded, broken, or chunks missing.\n\n"
+        f"Among valid candidates, **PREFER THE HIGHER-STRENGTH (more "
+        f"aggressive) one** as long as the main object and sub-items are "
+        f"clearly intact.\n\n"
+        f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
+        f"No other text."})
+
+    payload = json.dumps({
+        "model": QWEN_AUTO_MODEL,
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": 200, "temperature": 0.1,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }).encode()
+    req = urllib.request.Request(
+        QWEN_AUTO_URL + "/chat/completions", data=payload,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        raw = json.loads(r.read())["choices"][0]["message"]["content"].strip()
+    m = re.search(r"\d+", raw)
+    pick = int(m.group()) if m else 1
+    pick = max(1, min(pick, len(candidates)))
+    print(f"[auto] qwen raw={raw!r} → candidate {pick}")
+    return pick - 1
+
+
 def vote_carve(in_ply: Path, masks_info: list, min_views_frac: float):
     """GPU-batched vote-carve via CuPy. Projects every splat through every
     camera in a single batched matmul, indexes into the mask tensor, sums
@@ -516,13 +587,22 @@ def main():
                     help=f"wider pad for fabric/upholstery (default {SAM_PAD_FABRIC_M})")
     ap.add_argument("--min-views-frac", type=float, default=MIN_VIEWS_FRAC,
                     help=f"strict vote threshold (default {MIN_VIEWS_FRAC})")
+    ap.add_argument("--auto", action="store_true",
+                    help="sweep 3 vote-frac candidates and ask Qwen to pick "
+                         "cleanest. Reuses cached SAM masks — only the vote "
+                         "step iterates. Same pattern as inside_outside --auto.")
     args = ap.parse_args()
     scene = args.scene_dir.resolve()
     obj = args.obj_dir.resolve()
 
+    # floor_drop RETIRED 2026-05-27 from general/bookshelf chains.
+    # Source 3_floor_drop.ply if present (table chain still produces it),
+    # else fall back to 2_sam_wide.ply (post-sam_carve hull carve).
     in_ply = obj / "3_floor_drop.ply"
     if not in_ply.exists():
-        sys.exit(f"[fatal] missing {in_ply}\n  run floor_drop.py first")
+        in_ply = obj / "2_sam_wide.ply"
+    if not in_ply.exists():
+        sys.exit(f"[fatal] no input PLY in {obj}\n  expected 3_floor_drop.ply or 2_sam_wide.ply")
     prompt_path = obj / "diagnostics" / "2_sam_wide" / "sam_prompt.txt"
     if not prompt_path.exists():
         sys.exit(f"[fatal] missing {prompt_path}\n  run sam_carve.py through step 2 first")
@@ -566,18 +646,61 @@ def main():
     # min_views_frac with prompt count so 5-term prompts vote at ~0.4
     # (which preserves the body) instead of 0.7 (which kills it).
     n_prompts = len(prompts)
-    if n_prompts >= 3:
-        scaled_frac = max(0.4, args.min_views_frac - 0.10 * (n_prompts - 2))
-        print(f"[C] {n_prompts}-term prompt → scaling min_views_frac "
-              f"{args.min_views_frac:.2f} → {scaled_frac:.2f}")
-        eff_frac = scaled_frac
+    if args.auto:
+        # Sweep 3 effective vote-fracs, render each, ask Qwen to pick.
+        # The SAM masks are already computed; only the vote step iterates.
+        sweep_dir = diag / "sweep"
+        sweep_dir.mkdir(parents=True, exist_ok=True)
+        cands = []
+        for eff in SAM_TIGHT_AUTO_SWEEP_EFF:
+            keep_s, n_kept_s, n_in_s, req_s, nv_s, v_s = vote_carve(
+                in_ply, masks_info, eff)
+            cand_dir = sweep_dir / f"frac_{eff:.2f}"
+            cand_dir.mkdir(parents=True, exist_ok=True)
+            cand_ply = cand_dir / "cand.ply"
+            PlyData([PlyElement.describe(v_s.data[keep_s], "vertex")],
+                    text=False).write(str(cand_ply))
+            cand_renders = cand_dir / "renders"
+            render_canonical_5(cand_ply, cand_renders)
+            r_y0 = cand_renders / "y0.png"
+            r_y180 = cand_renders / "y180.png"
+            cands.append({
+                "frac": eff,
+                "frac_kept": n_kept_s / n_in_s,
+                "renders": [r_y0, r_y180],
+                "keep": keep_s, "n_kept": n_kept_s, "n_in": n_in_s,
+                "required": req_s, "n_views": nv_s, "v": v_s,
+            })
+            print(f"  [auto] frac={eff:.2f}: kept "
+                  f"{100*n_kept_s/n_in_s:.1f}% ({n_kept_s:,}/{n_in_s:,}) "
+                  f"req {req_s}/{nv_s}")
+        ci = _qwen_pick_vote_frac(cands, parent_label, pipe_prompt)
+        chosen = cands[ci]
+        eff_frac = chosen["frac"]
+        keep = chosen["keep"]
+        n_kept = chosen["n_kept"]
+        n_in = chosen["n_in"]
+        required = chosen["required"]
+        n_views = chosen["n_views"]
+        v = chosen["v"]
+        print(f"[auto] Qwen-chosen vote-frac = {eff_frac:.2f} "
+              f"({n_kept:,}/{n_in:,} kept, req {required}/{n_views})")
     else:
-        eff_frac = args.min_views_frac
-    print(f"\n[C] voting at min_views_frac={eff_frac:.2f}...")
-    keep, n_kept, n_in, required, n_views, v = vote_carve(
-        in_ply, masks_info, eff_frac)
-    print(f"[vote] required ≥{required}/{n_views} votes")
-    print(f"[vote] kept {n_kept:,} / {n_in:,} ({100*n_kept/n_in:.1f}%)")
+        # When the prompt has many terms, scale min_views_frac DOWN with
+        # prompt count so 5-term prompts vote at ~0.4 (preserves body)
+        # instead of 0.7 (kills it).
+        if n_prompts >= 3:
+            scaled_frac = max(0.4, args.min_views_frac - 0.10 * (n_prompts - 2))
+            print(f"[C] {n_prompts}-term prompt → scaling min_views_frac "
+                  f"{args.min_views_frac:.2f} → {scaled_frac:.2f}")
+            eff_frac = scaled_frac
+        else:
+            eff_frac = args.min_views_frac
+        print(f"\n[C] voting at min_views_frac={eff_frac:.2f}...")
+        keep, n_kept, n_in, required, n_views, v = vote_carve(
+            in_ply, masks_info, eff_frac)
+        print(f"[vote] required ≥{required}/{n_views} votes")
+        print(f"[vote] kept {n_kept:,} / {n_in:,} ({100*n_kept/n_in:.1f}%)")
 
     out_ply = obj / "4_sam_tight.ply"
     PlyData([PlyElement.describe(v.data[keep], "vertex")],

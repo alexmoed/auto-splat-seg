@@ -49,7 +49,7 @@ MIN_MASK_PX = 2000
 # spread-out thresholds + one Qwen call. Validated on sofa: Qwen picked
 # 0.60 with the new prompt. 0.30 is just above the prior fixed default
 # (0.25) — light end. 0.60 is the aggressive end. 0.45 is the middle.
-SWEEP_3 = [0.30, 0.45, 0.60]
+SWEEP_3 = [0.30, 0.45, 0.60, 0.75, 0.85]  # expanded 2026-05-27 — bookshelf wanted higher than 0.60; let Qwen pick across the full ladder including the high-strength end.
 THR_MIN, THR_MAX = 0.1, 0.7
 FOV, W, H = 70.0, 1920, 1080
 # Candidate sweep renders shown to Qwen are framed WIDE (object well
@@ -274,26 +274,11 @@ def main():
                 label = None
     label = label or "furniture object"
 
-    # EXEMPTION — bookshelves / open shelving skip this step entirely.
-    # Their open structure (shelves, gaps, contents) is too complex for a
-    # silhouette inside/outside carve; pass the input through unchanged.
-    if is_shelving(label):
-        print(f"[inside_outside] SKIPPED — '{label}' is a shelving/bookshelf "
-              f"class, exempt from inside/outside refinement (too "
-              f"structurally open). Input passed through unchanged.")
-        out_ply = out_root / "6_inside_outside.ply"
-        shutil.copy(str(in_ply), str(out_ply))
-        render_canonical_5(out_ply, out_root / "renders" / "6_inside_outside")
-        diag = out_root / "diagnostics" / "6_inside_outside"
-        diag.mkdir(parents=True, exist_ok=True)
-        (diag / "report.json").write_text(json.dumps({
-            "stage": "inside_outside", "skipped": True,
-            "reason": "shelving/bookshelf class exempt",
-            "label": label, "input_ply": str(in_ply),
-            "output_ply": str(out_ply),
-        }, indent=2))
-        print(f"[done] {out_ply} (passthrough — exempt)")
-        return
+    # SHELVING EXEMPTION RETIRED 2026-05-27 — bookshelves now run through
+    # inside_outside with the expanded SWEEP_3 ladder. Validated on
+    # light_wood_bookshelf: Qwen picked 0.75 → clean carve, ~5% removed,
+    # no shelf contents eroded. (Previously skipped because the original
+    # 3-threshold sweep [0.30, 0.45, 0.60] couldn't reach high enough.)
 
     # Pool masks from BOTH SAM passes — Pass A high cameras
     # (diagnostics/4_sam_tight) and Pass B low cameras

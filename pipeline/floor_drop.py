@@ -416,7 +416,15 @@ def main():
     ap.add_argument("--no-normal-filter", action="store_true",
                     help="disable normal-aware filtering — drop everything in band "
                          "(WILL kill chair legs touching floor)")
+    ap.add_argument("--src-ply", type=str, default="2_sam_wide.ply",
+                    help="input PLY filename inside obj_dir (default 2_sam_wide.ply; "
+                         "general chain calls with 4_sam_tight.ply)")
+    ap.add_argument("--out-stage-name", type=str, default="3_floor_drop",
+                    help="stage name for output PLY + dirs (default 3_floor_drop; "
+                         "general chain calls with 4a_floor_drop to place between sam_tight and sam_low)")
     args = ap.parse_args()
+    OUT_STAGE = args.out_stage_name
+    OUT_PLY_NAME = f"{OUT_STAGE}.ply"
     scene = args.scene_dir.resolve()
     obj = args.obj_dir.resolve()
 
@@ -429,9 +437,9 @@ def main():
     print(f"[plane] equation: {pa:.6f}*x + {pb:.6f}*y + {pc:.6f}*z + {pd:.6f}")
     print(f"[plane] floor y ≈ {-pd / pb:.3f}")
 
-    in_ply = obj / "2_sam_wide.ply"
+    in_ply = obj / args.src_ply
     if not in_ply.exists():
-        sys.exit(f"[fatal] missing {in_ply}\n  run sam_carve.py through step 4 first")
+        sys.exit(f"[fatal] missing {in_ply}\n  expected source PLY at {args.src_ply}")
     pl = PlyData.read(str(in_ply))
     v = pl["vertex"]
     xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64)
@@ -486,13 +494,13 @@ def main():
     # classes (used by v29 A/B comparison run — pure no-floor_drop test).
     import os
     if os.environ.get("FLOOR_DROP_SKIP", "0") == "1":
-        out_ply = obj / "3_floor_drop.ply"
+        out_ply = obj / OUT_PLY_NAME
         print(f"[floor_drop] SKIPPED — FLOOR_DROP_SKIP=1 env var set "
               f"(global disable). Copying {in_ply.name} -> {out_ply.name}.")
         shutil.copy(str(in_ply), str(out_ply))
-        out_renders = obj / "renders" / "3_floor_drop"
+        out_renders = obj / "renders" / OUT_STAGE
         render_canonical_5(out_ply, out_renders)
-        diag = obj / "diagnostics" / "3_floor_drop"
+        diag = obj / "diagnostics" / OUT_STAGE
         diag.mkdir(parents=True, exist_ok=True)
         (diag / "report.json").write_text(json.dumps({
             "stage": "floor_drop", "skipped": True,
@@ -511,14 +519,14 @@ def main():
                          "shelf", "etagere", "etagère", "étagère")
     label_lo = label.lower()
     if any(k in label_lo for k in SHELVING_KEYWORDS):
-        out_ply = obj / "3_floor_drop.ply"
+        out_ply = obj / OUT_PLY_NAME
         print(f"[floor_drop] SKIPPED — '{label}' is shelving/bookshelf class, "
               f"exempt from floor RANSAC (preserves bottom shelf + kick-plate). "
               f"Copying {in_ply.name} -> {out_ply.name}.")
         shutil.copy(str(in_ply), str(out_ply))
-        out_renders = obj / "renders" / "3_floor_drop"
+        out_renders = obj / "renders" / OUT_STAGE
         render_canonical_5(out_ply, out_renders)
-        diag = obj / "diagnostics" / "3_floor_drop"
+        diag = obj / "diagnostics" / OUT_STAGE
         diag.mkdir(parents=True, exist_ok=True)
         (diag / "report.json").write_text(json.dumps({
             "stage": "floor_drop", "skipped": True,
@@ -529,7 +537,7 @@ def main():
         print(f"[done] {out_ply} (passthrough — shelving exempt)")
         return
 
-    diag = obj / "diagnostics" / "3_floor_drop"
+    diag = obj / "diagnostics" / OUT_STAGE
     diag.mkdir(parents=True, exist_ok=True)
     # Clear stale per-iter files from prior runs
     for f in diag.glob("iter*"):
@@ -596,9 +604,9 @@ def main():
         winner = next(h for h in history if h["iter"] == best_idx)
 
     # Promote winner to canonical floor_drop.ply + renders/floor_drop/
-    out_ply = obj / "3_floor_drop.ply"
+    out_ply = obj / OUT_PLY_NAME
     shutil.copy(winner["ply_path"], out_ply)
-    out_render_dir = obj / "renders" / "3_floor_drop"
+    out_render_dir = obj / "renders" / OUT_STAGE
     if out_render_dir.exists():
         shutil.rmtree(out_render_dir)
     shutil.copytree(winner["render_dir"], out_render_dir)
