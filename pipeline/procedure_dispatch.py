@@ -178,7 +178,7 @@ STAGE_FINAL_PICK = (
     "stage_pick",
     lambda s, o: [sys.executable, str(ITERATION_DIR / "stage_pick.py"),
                   str(o)],
-    "7_final.ply",
+    "8_final.ply",
 )
 # Drop big+dark Gaussian splat streaks (one axis blew up, color collapsed
 # ~black). Locked 2026-05-27 after light_wood_bookshelf had visible black
@@ -257,8 +257,7 @@ GENERAL_PRE_QC_STAGES = [
     STAGE_SAM_HIGH_REFINE,         # Pass C steep — reads 4b_sam_tight_low (chains via low)
     STAGE_SWEEP_FALLBACK,          # Qwen-bbox vote refinement on top of 4_sam_tight
     STAGE_INSIDE_OUTSIDE,          # multi-mask insideness carve
-    STAGE_FINAL_PICK,              # Qwen picks cleanest stage → 7_final.ply
-    STAGE_DESTREAK,                # drop big+dark streak splats from 7_final.ply (2026-05-27)
+    STAGE_FINAL_PICK,              # Stage 7+8: Qwen picks stage → 7_picked → destreak --auto → 7_destreak → 8_final.ply
 ]
 
 # Table chain — same as general but STOPS at 3_floor_drop.

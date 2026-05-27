@@ -247,10 +247,10 @@ def main():
         print(f"[pick] hardcoded order picked: {chosen['tag']} "
               f"({chosen['n_splats']:,} splats)")
 
-    # Copy to 7_final.ply
-    final_path = obj / "7_final.ply"
-    shutil.copy(chosen["ply"], final_path)
-    print(f"[save] {final_path}")
+    # Copy chosen stage → 7_picked.ply (intermediate before destreak)
+    picked_path = obj / "7_picked.ply"
+    shutil.copy(chosen["ply"], picked_path)
+    print(f"[save] {picked_path}")
 
     (obj / "final_pick.json").write_text(json.dumps({
         "picked_tag": chosen["tag"],
@@ -258,17 +258,40 @@ def main():
         "picked_n_splats": chosen["n_splats"],
         "candidates": [{"tag": c["tag"], "ply": c["fname"],
                          "n_splats": c["n_splats"]} for c in cands],
-        "pick_method": "hardcoded_preference_order",
+        "pick_method": "qwen_or_hardcoded_preference",
         "preferred_order": PREFERRED_ORDER,
         "label": label,
     }, indent=2))
 
-    # Render final canonical 5 for downstream consumers
-    renders_dir = obj / "renders" / "7_final"
+    # Render 7_picked canonical 5 (diagnostics for the pre-destreak stage)
+    picked_renders = obj / "renders" / "7_picked"
+    render_canonical_5(picked_path, picked_renders)
+    print(f"[render] canonical 5 → {picked_renders}")
+
+    # Stage 7 — destreak --auto: 4-way Qwen pick (skip + 3 thresholds) → 7_destreak.ply
+    print(f"\n[stage7] destreak --auto on 7_picked.ply")
+    destreak_rc = subprocess.run([
+        sys.executable, str(ITERATION_DIR / "splat_destreak.py"),
+        str(obj), "--auto",
+        "--in-ply", "7_picked.ply",
+        "--out-ply", "7_destreak.ply",
+    ]).returncode
+    if destreak_rc != 0:
+        print(f"[stage7] destreak FAILED rc={destreak_rc} — falling back to 7_picked")
+        destreak_path = picked_path
+    else:
+        destreak_path = obj / "7_destreak.ply"
+
+    # Stage 8 — final: copy destreak → 8_final.ply, render, splat
+    final_path = obj / "8_final.ply"
+    shutil.copy(destreak_path, final_path)
+    print(f"[stage8] {final_path}")
+
+    renders_dir = obj / "renders" / "8_final"
     render_canonical_5(final_path, renders_dir)
     print(f"[render] canonical 5 → {renders_dir}")
 
-    # Convert 7_final.ply → final.splat for web-viewer use.
+    # Convert 8_final.ply → final.splat for web-viewer use.
     splat_path = obj / "final.splat"
     rc = subprocess.run([
         sys.executable, str(ITERATION_DIR / "ply_to_splat.py"),
@@ -295,7 +318,7 @@ def main():
     }, indent=2))
     print(f"\n[rename] deferred to procedure_dispatch (refined_slug='{new_slug}')")
 
-    print(f"\n[done] picked: {chosen['tag']} → 7_final.ply + final.splat")
+    print(f"\n[done] picked: {chosen['tag']} → 7_picked.ply → 7_destreak.ply → 8_final.ply + final.splat")
 
 
 if __name__ == "__main__":
