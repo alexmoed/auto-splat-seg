@@ -919,11 +919,10 @@ def _sam_pass_on_views(cam_data, prompts, sam_pad):
     for cam in cam_data["cameras"]:
         tag = cam["tag"]
         img_path = Path(cam["png"])
-        # Prefer carved-hull render (neighbors removed) so SAM can't latch
-        # onto residual neighbor splats. Falls through when no neighbors carved.
-        qwen_alt = img_path.parent / f"input_qwen_{tag}.png"
-        if qwen_alt.exists():
-            img_path = qwen_alt
+        # Carved-hull render (input_qwen_*) is for Qwen prompt-derivation
+        # in step 2 only. SAM3 in step 3 must see the FULL hull — otherwise
+        # neighbor-bbox-overlap (e.g. dining chairs around dining table) erases
+        # the target's edges and SAM gets a partial silhouette. 2026-05-28.
         K = np.array(cam["K"])
         eye = np.array(cam["eye"])
         target = np.array(cam["target"])
