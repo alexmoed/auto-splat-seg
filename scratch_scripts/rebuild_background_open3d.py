@@ -31,6 +31,7 @@ from plyfile import PlyData, PlyElement
 
 # Match the stage-preference chain extract_background.py uses
 OBJECT_STAGE_CANDIDATES = [
+    "8_final.ply",   # v32 final stage (stage_pick → destreak → 8_final)
     "7_final.ply",
     "6_inside_outside.ply",
     "5_subtracted.ply",
@@ -96,7 +97,12 @@ def main():
                          "scale fields from the PLY.")
     ap.add_argument("--out", type=Path, default=None,
                     help="output PLY (default <scene>/scene_background_o3d.ply)")
+    ap.add_argument("--exclude", type=str, default="",
+                    help="comma-separated 02_* folder names to NOT subtract "
+                         "(they stay baked into the background shell = no holes "
+                         "for non-keeper objects)")
     args = ap.parse_args()
+    exclude = {x.strip() for x in args.exclude.split(",") if x.strip()}
 
     scene = args.scene_dir.resolve()
     src = args.source_ply or (scene / "step7_cardinal_aligned.ply")
@@ -120,7 +126,10 @@ def main():
     # 2) Build the union object cloud from every 02_* stage PLY
     # ──────────────────────────────────────────────────────────────
     obj_dirs = sorted([d for d in scene.iterdir()
-                        if d.is_dir() and d.name.startswith("02_")])
+                        if d.is_dir() and d.name.startswith("02_")
+                        and d.name not in exclude])
+    if exclude:
+        print(f"\n[exclude] NOT subtracting (left in shell): {sorted(exclude)}")
     print(f"\n[gather] {len(obj_dirs)} object folders")
     obj_clouds = []
     obj_meta = []

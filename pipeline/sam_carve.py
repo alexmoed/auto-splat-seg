@@ -364,7 +364,12 @@ def step1_render_views(scene_dir: Path, obj_dir: Path):
             label = (json.load(open(meta_p)).get("label") or "").lower()
         except Exception:
             label = ""
-    if "floor lamp" in label:
+    # Match any floor lamp phrasing the inventory emits: "floor lamp",
+    # "floor-standing lamp", "floor standing lamp", "tall floor lamp".
+    # NOT "table lamp" (no "floor"). 2026-05-28 — the literal "floor lamp"
+    # substring missed "floor-standing lamp" and the lamp framing never fired.
+    is_floor_lamp = ("floor" in label and "lamp" in label)
+    if is_floor_lamp:
         y_min = float(means[:, 1].min())
         y_max = float(means[:, 1].max())
         center[1] = np.float32((y_min + y_max) / 2.0)
@@ -377,7 +382,7 @@ def step1_render_views(scene_dir: Path, obj_dir: Path):
     # only ~half the frame (lots of white space — "looks far"). Use a
     # tighter 1.4 so the lamp fills the frame; 1.4 still clears the p-45
     # tilt (the lamp's 3D diagonal is well inside extent*1.4).
-    margin = 1.4 if "floor lamp" in label else RENDER_MARGIN
+    margin = 1.4 if is_floor_lamp else RENDER_MARGIN
     distance = (extent * margin) / (2 * tan_half)
     print(f"[frame] center={center.tolist()} extent={extent:.2f}m "
           f"dist={distance:.2f}m margin={RENDER_MARGIN}")

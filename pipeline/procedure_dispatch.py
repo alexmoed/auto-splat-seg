@@ -276,6 +276,26 @@ TABLE_PRE_QC_STAGES = [
     STAGE_FINAL_PICK,       # 2026-05-20 — falls through to 3_floor_drop.ply.
 ]
 
+# Floor / standing lamp chain (validated 2026-05-28 on
+# 02_floor_standing_lamp). A floor lamp is a THIN pole + base + shade.
+# sam_tight's vote_carve erodes the pole (it never accumulates the
+# ≥0.7·N_views needed to survive — a 3cm-wide pole projects to a few px
+# and misses most yaw masks), collapsing the lamp 9,042 → 922 splats.
+# inside_outside's multi-mask insideness carve has the same effect on the
+# stem. So this chain SKIPS both: sam_carve s1-s4 → promote 2_sam_wide →
+# sweep_fallback → stage_pick(+destreak --auto). The destreak --auto
+# inside stage_pick runs the geom bottom-25% pre-clean (drops the
+# big+elongated+isolated floor-shadow streaks at the base) + the color
+# streak sweep. Result: 3,868-splat readable lamp with pole + shade + base
+# intact and base halo cleaned.
+LAMP_PRE_QC_STAGES = [
+    STAGE_SAM_CARVE_S1, STAGE_SAM_CARVE_S2,
+    STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
+    # STAGE_SAM_TIGHT_FROM_FLOOR + STAGE_INSIDE_OUTSIDE — SKIPPED (thin pole)
+    STAGE_SWEEP_FALLBACK,   # sources 4_sam_tight (= promoted 2_sam_wide)
+    STAGE_FINAL_PICK,       # stage_pick → destreak --auto (geom + color) → 8_final
+]
+
 
 def _read_qc_verdict(obj_dir: Path) -> str | None:
     p = obj_dir / "qc_reject.json"
@@ -567,6 +587,42 @@ def run_table(scene: Path, obj_dir: Path) -> dict:
     return status
 
 
+def run_lamp(scene: Path, obj_dir: Path) -> dict:
+    """Floor / standing lamp chain (validated 2026-05-28 on
+    02_floor_standing_lamp): sam_carve s1-s4 → promote 2_sam_wide →
+    sweep_fallback → stage_pick(+destreak --auto) → final.
+
+    Skips sam_tight (its vote_carve erodes the thin pole — 9,042 → 922)
+    AND inside_outside (multi-mask carve also eats the stem). Promotes
+    2_sam_wide.ply → 4_sam_tight.ply so sweep_fallback / stage_pick /
+    info / split_children all find the expected file name. The geom
+    bottom-25% destreak inside stage_pick's `destreak --auto` cleans the
+    base floor-shadow streaks; the color sweep drops dark streaks."""
+    import shutil as _sh
+    # sam_carve s1-s4 → 2_sam_wide.ply
+    status = _run_chain(scene, obj_dir, LAMP_PRE_QC_STAGES[:4])
+    wide = obj_dir / "2_sam_wide.ply"
+    tight = obj_dir / "4_sam_tight.ply"
+    if wide.exists() and not tight.exists():
+        _sh.copy(str(wide), str(tight))
+        status["sam_tight"] = "skipped_lamp_route → 4_sam_tight = 2_sam_wide"
+    # sweep_fallback (from 4_sam_tight) → stage_pick (+destreak --auto)
+    status.update(_run_chain(scene, obj_dir, LAMP_PRE_QC_STAGES[4:]))
+    status = _post_extract_qc(scene, obj_dir, status)
+    # Split items-on-top (a floor lamp rarely has any, but keep parity in
+    # case Qwen sees a small accent table / books beside it).
+    if obj_dir.exists() and (obj_dir / "diagnostics" / "2_sam_wide" /
+                              "sam_prompt.txt").exists():
+        if (obj_dir / "children" / "manifest.json").exists():
+            status["split_children"] = "skip"
+        else:
+            rc = subprocess.run([sys.executable,
+                                  str(ITERATION_DIR / "split_children.py"),
+                                  str(scene), str(obj_dir)]).returncode
+            status["split_children"] = "ok" if rc == 0 else f"fail({rc})"
+    return status
+
+
 def run_skip(scene: Path, obj_dir: Path) -> dict:
     print("  [skip] no extraction; object will roll into leftover")
     return {"skip": "ok"}
@@ -578,6 +634,7 @@ PROCEDURES = {
     "bookshelf": run_bookshelf,
     "rug":       run_rug,
     "table":     run_table,
+    "lamp":      run_lamp,
     "skip":      run_skip,
 }
 
@@ -603,6 +660,13 @@ TABLE_PATTERN = re.compile(r"\b(table|desk)\b", re.IGNORECASE)
 # full sam_tight + on-top-items path.
 TABLE_EXCLUDE = re.compile(r"\b(sideboard|cabinet|console|nightstand)\b",
                            re.IGNORECASE)
+# Floor / standing lamp — thin pole + base + shade. Routes to the lamp
+# chain (skips sam_tight + inside_outside, both of which erode the pole).
+# Requires "floor"/"standing"/"torchiere" so it does NOT catch a "table
+# lamp" / "desk lamp" (those sit on furniture → general route / child).
+LAMP_PATTERN = re.compile(
+    r"\b(floor[- ]?lamp|floor[- ]?standing\s+lamp|standing\s+lamp|torch[ie]+re)\b",
+    re.IGNORECASE)
 
 
 def decide_procedure(label: str) -> str:
@@ -613,6 +677,12 @@ def decide_procedure(label: str) -> str:
     # furniture-that-holds-a-TV (stand / console / cabinet / unit / table).
     if TV_PATTERN.search(lo) and not TV_EXCLUDE.search(lo):
         return "tv"
+    # Floor / standing lamp — thin pole; route to the lamp chain (skips
+    # sam_tight + inside_outside). Checked before table so a "floor lamp"
+    # never falls through; "table lamp" / "desk lamp" don't match
+    # LAMP_PATTERN (no floor/standing) and stay on their existing route.
+    if LAMP_PATTERN.search(lo):
+        return "lamp"
     # Bookshelf route RETIRED from auto-routing 2026-05-22 — the general
     # route extracts bookshelves at least as cleanly (validated on the
     # light-wood + tall metal-frame bookshelves) and keeps the pipeline

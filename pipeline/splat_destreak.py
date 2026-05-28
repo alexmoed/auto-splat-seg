@@ -52,14 +52,18 @@ from sam_carve import (  # noqa: E402
 DEFAULT_MIN_SCALE_M = 0.10
 DEFAULT_MAX_BRIGHTNESS = 0.25
 
-# 3-threshold sweep for --auto. Ordered conservative → aggressive.
-# Conservative drops fewer (only the biggest+darkest); aggressive drops
-# more (catches dimmer / smaller streaks at the cost of nibbling some
-# legit material). Qwen picks visually.
+# Threshold ladder for --auto. Ordered least → most aggressive. More
+# tiers = a smoother ramp so Qwen isn't forced to jump from "barely
+# anything" to "a lot" — it can land on the right amount. Each tier
+# loosens BOTH knobs: smaller min_scale catches smaller streaks, higher
+# max_brightness reaches lighter (e.g. brown floor-shadow) blobs, at the
+# cost of nibbling more legit material. Qwen picks visually.
 AUTO_THRESHOLDS = [
     {"min_scale": 0.15, "max_brightness": 0.20, "tag": "conservative"},
     {"min_scale": 0.10, "max_brightness": 0.25, "tag": "default"},
+    {"min_scale": 0.08, "max_brightness": 0.30, "tag": "moderate"},
     {"min_scale": 0.06, "max_brightness": 0.35, "tag": "aggressive"},
+    {"min_scale": 0.05, "max_brightness": 0.42, "tag": "very_aggressive"},
 ]
 
 
@@ -78,6 +82,46 @@ def _compute_drop_mask(v, min_scale_m: float, max_brightness: float):
 def _write_filtered_ply(v, drop_mask, out_path: Path):
     PlyData([PlyElement.describe(v.data[~drop_mask], "vertex")],
             text=False).write(str(out_path))
+
+
+# Geometry destreak — bottom-band only. Color destreak misses LIGHT
+# floor-shadow streaks; this drops them by geometry (big + elongated +
+# isolated) instead of color. Restricted to the BOTTOM 25% of the
+# object's height so the body, items-on-top, and connected legs (low
+# isolation) are never touched. y-down: larger y = lower in the world.
+GEOM_BAND_FRAC = 0.25     # only the lowest quarter of the object
+GEOM_MIN_SCALE = 0.07     # only big splats
+GEOM_ANISO = 4.0          # only elongated (streak-shaped) splats
+GEOM_ISO_PCT = 90         # only the most isolated (off-body) splats
+
+
+def geom_destreak_bottom(in_ply: Path, out_ply: Path,
+                          band_frac: float = GEOM_BAND_FRAC,
+                          min_scale: float = GEOM_MIN_SCALE,
+                          aniso_thresh: float = GEOM_ANISO,
+                          iso_pct: float = GEOM_ISO_PCT) -> int:
+    """Drop big+elongated+isolated splats in the bottom band only.
+    Writes out_ply, returns n_dropped."""
+    from scipy.spatial import cKDTree
+    p = PlyData.read(str(in_ply))
+    v = p["vertex"]
+    xyz = np.stack([v["x"], v["y"], v["z"]], axis=1).astype(np.float64)
+    sc = np.exp(np.stack([v["scale_0"], v["scale_1"], v["scale_2"]],
+                          axis=1).astype(np.float64))
+    max_scale = sc.max(axis=1)
+    aniso = max_scale / np.clip(sc.min(axis=1), 1e-6, None)
+    tree = cKDTree(xyz)
+    d, _ = tree.query(xyz, k=9)
+    iso = d[:, 1:].mean(axis=1)
+    iso_thresh = np.percentile(iso, iso_pct)
+    y = xyz[:, 1]
+    y_lo, y_hi = float(y.min()), float(y.max())   # y_hi = bottom (floor)
+    in_band = y >= (y_hi - band_frac * (y_hi - y_lo))
+    drop = (in_band & (max_scale > min_scale) &
+            (aniso > aniso_thresh) & (iso > iso_thresh))
+    PlyData([PlyElement.describe(v.data[~drop], "vertex")],
+            text=False).write(str(out_ply))
+    return int(drop.sum())
 
 
 def _render_y0(ply_path: Path, out_png: Path):
@@ -118,29 +162,38 @@ def _qwen_pick(candidates):
         content.append({"type": "image_url", "image_url": {
             "url": f"data:image/png;base64,{_b64(c['render'])}"}})
     n = len(candidates)
+    ladder = "\n".join(
+        f"  Candidate {i+1}: {c['tag']}"
+        + (" — NO destreaking, source as-is" if c["tag"] == "skip" else "")
+        for i, c in enumerate(candidates))
     content.append({"type": "text", "text":
-        f"Each candidate shows the same extracted object. A 'destreak' "
-        f"cleanup tries to drop large dark Gaussian splat streaks (an "
-        f"optimizer failure mode that paints big black smears, vertical "
-        f"black bars, fuzzy dark halos, or random black blobs near or "
-        f"across the object).\n\n"
-        f"Candidate 1 (skip): NO destreaking — source as-is.\n"
-        f"Candidate 2 (conservative): drops only the biggest, darkest streaks.\n"
-        f"Candidate 3 (default): moderate cleanup.\n"
-        f"Candidate 4 (aggressive): drops dimmer/smaller streaks too. May "
-        f"start nibbling legitimate dark material like dark wood, dark "
-        f"fabric, or shadow detail.\n\n"
-        f"DEFAULT BIAS: prefer to remove streaks. Black smears, vertical "
-        f"black bars, fuzzy dark blobs floating near the object, or dark "
-        f"halos around edges are ALWAYS artifacts and should be removed. "
-        f"Pick candidate 2 or 3 in most cases.\n\n"
-        f"Pick candidate 1 (skip) ONLY if you are CONFIDENT the source has "
-        f"zero visible black smears or halos AND every destreak candidate "
-        f"removes legitimate dark material the object actually has (dark "
-        f"wood, dark cushion fabric, etc.). When in doubt between skip and "
-        f"conservative, pick conservative.\n\n"
-        f"Pick candidate 4 (aggressive) only when streaks are SEVERE and "
-        f"the object has little legitimate dark material.\n\n"
+        f"Each candidate shows the SAME extracted object after a different "
+        f"amount of 'destreak' cleanup. Destreak drops large dark Gaussian "
+        f"splat streaks — an optimizer failure mode that paints big black "
+        f"smears, vertical black bars, fuzzy dark halos, brown floor-shadow "
+        f"blobs under the object, or random dark blobs near or across it.\n\n"
+        f"The candidates are ordered from LEAST to MOST aggressive:\n"
+        f"{ladder}\n\n"
+        f"You must BALANCE two opposite failure modes:\n"
+        f"  (A) UNDER-cleaning — the candidate still shows floating dark or "
+        f"brown blobs, vertical bars, fuzzy streaks, or shadow halos on the "
+        f"floor under/around the object. These are artifacts that should go.\n"
+        f"  (B) OVER-cleaning — the candidate has started eating the OBJECT "
+        f"ITSELF: holes, gaps, or moth-eaten patches appear in the object's "
+        f"solid surfaces (its front face, doors, drawers, body panels), the "
+        f"surface looks washed-out / semi-transparent / pitted, or legs "
+        f"thin out and break up. This RUINS the object and is NOT acceptable.\n\n"
+        f"GOAL: pick the candidate that removes the floating / floor "
+        f"artifacts (A) while the object's own surfaces stay SOLID, OPAQUE, "
+        f"and fully detailed (no B). The object body must look like clean "
+        f"continuous material — not patchy or holey.\n\n"
+        f"Scan from the MOST aggressive candidate downward and reject any "
+        f"that show ANY sign of (B) — holes/patches/washout on the object "
+        f"body. Pick the most aggressive candidate that is still completely "
+        f"free of (B). A little residual floor shadow is far better than a "
+        f"single hole in the object's front face.\n\n"
+        f"Pick candidate 1 (skip) ONLY if the source already has zero "
+        f"visible streaks/blobs/halos.\n\n"
         f"Reply with ONLY the number (1 to {n}). No other text."})
 
     payload = json.dumps({
@@ -174,6 +227,18 @@ def run_auto_sweep(obj: Path, in_ply_name: str, out_ply_name: str):
         return
 
     import shutil
+    # Geometry pre-clean (bottom-25% band only): drop big+elongated+isolated
+    # floor-shadow streaks the COLOR sweep can't catch (they aren't dark).
+    # The color candidates below build from this geom-cleaned base.
+    diag = obj / "diagnostics" / "7_destreak"
+    diag.mkdir(parents=True, exist_ok=True)
+    geom_base = diag / "_geom_base.ply"
+    n_geom = geom_destreak_bottom(src, geom_base)
+    if n_geom > 0:
+        print(f"[destreak] geom bottom-{int(GEOM_BAND_FRAC*100)}% pre-clean: "
+              f"dropped {n_geom:,} floor-shadow streaks")
+        src = geom_base   # color sweep + skip candidate use the cleaned base
+
     p = PlyData.read(str(src))
     v = p["vertex"]
     n_in = len(v)
