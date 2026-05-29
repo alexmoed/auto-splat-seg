@@ -8,6 +8,25 @@ the fix baked (`ab4ea04071ce`); old image preserved as
 This file tracks what is NOT done / still fragile. It is a living list — update it
 as items are closed or new risks appear.
 
+## RESOLVED 2026-05-29 PM (commit `3c4edc9`, after the full multi-agent audit)
+
+The audit (`AUDIT_REPORT.md`) raised 1 critical + 10 high + 36 more; these are fixed:
+- **CRITICAL — child-splat double-count.** `subtract.py` now reads the parent's
+  current final (`8_final` via `pick_stage`) and writes **`9_subtracted`**, added
+  at the TOP of `STAGE_PREFERENCE`, so the carved parent ships (no children
+  double-counted). Verified end-to-end. Only applies to parents-with-children.
+- **HIGH — Concern #2 below (cabinet wall-adjacency) is now CLOSED.** `run_general`
+  asserts front-arc for wall-flush storage (`is_wall_flush_storage`), same proven
+  `_assert_wall_adjacent` as the bookshelf route. Cabinets keep RANSAC + get front-arc.
+- **HIGH — wall-adjacency producer hardened.** `check_wall_adjacent_via_qwen` now
+  wraps the Qwen call in try/except (no crash after the PLY is written), writes a
+  verdict on every early-return (no silent missing-file → keep-360), and parses
+  `\bYES\b` robustly.
+
+Image `splat-pipeline:cleanup-test` rebuilt with these baked; pre-fix image preserved
+as `splat-pipeline:cleanup-test-pre-auditfix`. STILL the bigger remaining set from
+`AUDIT_REPORT.md` (the other ~8 highs + mediums/lows) is open.
+
 ---
 
 ## Context: what was just fixed (so the concerns read in context)
