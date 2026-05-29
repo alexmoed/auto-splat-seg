@@ -6,8 +6,12 @@ computes a 3D AABB (p5/p95 percentile, robust to outliers), and assigns:
 
   A is parent of B  iff
     1. B's xz footprint is inside A's xz footprint (with tolerance), AND
-    2. B's y_min is at or just below A's y_max (B sits on A's top, ±10cm), AND
-    3. A's y_max is NOT near the room floor (the floor / a rug isn't a parent).
+    2. B's y_min is at or just below A's y_max (B sits on A's top, ±10cm).
+
+  NOTE: a third intended rule — "the floor / a rug isn't a parent" (reject a
+  candidate parent whose y_max is near the room floor) — is NOT currently
+  enforced. FLOOR_TOL is recorded in the output params but no comparison uses
+  it; find_room_floor_y is unused. Enabling it is a tracked follow-up.
 
 For each B, of all qualifying A, pick the SMALLEST (closest match — speaker
 sits on TV stand, not on the room as a whole).

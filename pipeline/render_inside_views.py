@@ -44,10 +44,9 @@ def find_in_room_reference(scene: Path) -> Path:
         p = scene / name
         if p.exists():
             return p
-        sib = scene.parent / "Kitchen_living_dining" / name
-        if sib.exists():
-            return sib
-    raise FileNotFoundError(f"no in-room reference PLY found near {scene}")
+    raise FileNotFoundError(
+        f"no in-room reference PLY ({', '.join(('step7_sliced.ply', 'scene_background.ply', 'step8_density_filtered.ply'))}) "
+        f"found in {scene}")
 
 
 def find_target_ply(scene: Path, override: Path | None) -> Path:
@@ -57,10 +56,8 @@ def find_target_ply(scene: Path, override: Path | None) -> Path:
         p = scene / name
         if p.exists():
             return p
-        sib = scene.parent / "Kitchen_living_dining" / name
-        if sib.exists():
-            return sib
-    raise FileNotFoundError(f"no target PLY found near {scene}")
+    raise FileNotFoundError(
+        f"no target PLY (scene_background.ply, step7_sliced.ply) found in {scene}")
 
 
 def main():

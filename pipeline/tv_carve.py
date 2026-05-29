@@ -108,13 +108,15 @@ def main():
         f.unlink()
 
     # Build cameras — same yaw direction (forward_xz), varying pitch.
-    # World is y-UP for this scene (despite up=(0,-1,0) image-space convention),
-    # i.e. larger y = higher in 3D. Pitch -N° = camera ABOVE object looking down,
-    # so eye.y must be LARGER than center.y for negative pitch.
+    # World is y-DOWN for this pipeline (floor_plane.json: small y = top,
+    # large y = floor). A negative pitch RAISES eye.y above center.y — and
+    # since larger y is toward the floor, that places the camera BELOW the
+    # object looking UP at it. (The carve works regardless; this note just
+    # keeps the geometry honest for anyone tuning PITCHES_DEG or the sign.)
     # Formula: eye.y = center.y - sin(pitch_rad) * distance
-    #   pitch =   0°  → sin=0       → eye.y = center.y                (horizontal)
-    #   pitch = -15°  → sin=-0.26   → eye.y = center.y + 0.26*dist    (slightly higher)
-    #   pitch = -60°  → sin=-0.87   → eye.y = center.y + 0.87*dist    (high looking down)
+    #   pitch =   0°  → sin=0       → eye.y = center.y                (level)
+    #   pitch = -15°  → sin=-0.26   → eye.y = center.y + 0.26*dist    (slightly below, looking up)
+    #   pitch = -60°  → sin=-0.87   → eye.y = center.y + 0.87*dist    (well below, looking up)
     scene_g = load_gsplat_ply(str(hull_ply))
     cameras = []
     for pitch_deg in PITCHES_DEG:

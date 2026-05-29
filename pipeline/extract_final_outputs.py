@@ -101,7 +101,10 @@ def main():
             if mp.exists():
                 try:
                     m = json.load(open(mp))
-                    label = m.get("object_type") or m.get("label")
+                    # info.py writes the rich Qwen name under 'name'
+                    # (rename_to_qwen already reads it first); fall back to
+                    # the coarser object_type/label for non-info metas.
+                    label = m.get("name") or m.get("object_type") or m.get("label")
                     if label:
                         break
                 except Exception:
