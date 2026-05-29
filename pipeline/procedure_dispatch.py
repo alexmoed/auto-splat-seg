@@ -89,38 +89,10 @@ STAGE_SAM_TIGHT_FROM_FLOOR = (
                   str(s), str(o)],
     "4_sam_tight.ply",
 )
-# Bookshelf-specific sam_tight: looser vote (0.5 vs 0.7) + bigger pads
-# (hard 0.05/fabric 0.15) — defaults nuke the body of a bookshelf because
-# only the front-facing yaws have valid SAM masks. Validated 2026-05-05
-# on 02_bookshelf.
-STAGE_SAM_TIGHT_BOOKSHELF = (
-    "sam_tight",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "sam_tight.py"),
-                  str(s), str(o),
-                  "--min-views-frac", "0.5",
-                  "--sam-pad-hard-m", "0.05",
-                  "--sam-pad-fabric-m", "0.15"],
-    "4_sam_tight.ply",
-)
-STAGE_BOOKSHELF_SWEEP = (
-    "bookshelf_sweep",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "bookshelf_sweep.py"),
-                  str(s), str(o)],
-    "5_bookshelf_sweep.ply",
-)
-# Second bookshelf_sweep pass at low pitches (sees up under the shelves
-# / catches the bottom plinth and base). Same Qwen-bbox-vote mechanism
-# as the main pass — just different camera elevations. Output PLY lives
-# alongside 5_bookshelf_sweep.ply so stage_pick can compare both.
-STAGE_BOOKSHELF_SWEEP_LOW = (
-    "bookshelf_sweep_low",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "bookshelf_sweep.py"),
-                  str(s), str(o),
-                  "--pitches", "0,15",
-                  "--out-name", "5b_bookshelf_sweep_low",
-                  "--src-ply", "4_sam_tight.ply"],
-    "5b_bookshelf_sweep_low.ply",
-)
+# (Retired 2026-05-29: STAGE_SAM_TIGHT_BOOKSHELF + STAGE_BOOKSHELF_SWEEP[_LOW].
+# The bookshelf/shelving chain now reuses the general stages minus floor_drop
+# — see BOOKSHELF_PRE_QC_STAGES + run_bookshelf below. bookshelf_sweep.py
+# skipped inside_outside and left a green haze; bookshelf_sweep.py is deleted.)
 # sam_low_refine — generates the low-camera SAM masks that inside_outside
 # pools with the 4_sam_tight (high) masks for the multi-mask insideness
 # carve. NOT a standalone carve — its 4b_sam_tight_low.ply output is
@@ -180,17 +152,10 @@ STAGE_FINAL_PICK = (
                   str(o)],
     "8_final.ply",
 )
-# Drop big+dark Gaussian splat streaks (one axis blew up, color collapsed
-# ~black). Locked 2026-05-27 after light_wood_bookshelf had visible black
-# vertical smears in the front view. Rewrites 7_final.ply in place when
-# it finds streaks; no-op otherwise. Optional — no streaks ≠ failure.
-STAGE_DESTREAK = (
-    "splat_destreak",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "splat_destreak.py"),
-                  str(o)],
-    "diagnostics/8_destreak/report.json",
-    True,  # optional — no streaks means no report, that's fine
-)
+# (Retired 2026-05-29: standalone STAGE_DESTREAK. stage_pick already runs
+# `splat_destreak --auto` internally (7_picked -> 7_destreak -> 8_final), so
+# the standalone stage was a redundant re-run with a never-matching marker.
+# splat_destreak.py itself stays — stage_pick uses it.)
 STAGE_INFO = (
     "info",
     lambda s, o: [sys.executable, str(ITERATION_DIR / "info.py"),
@@ -505,35 +470,50 @@ def run_tv(scene: Path, obj_dir: Path) -> dict:
     return status
 
 
+# Shelving / bookshelf / cabinet chain (locked 2026-05-29). This is EXACTLY
+# the general chain MINUS floor_drop (RANSAC) — reproducing the verified-good
+# v32 display-shelf + bookshelf result (general + no-RANSAC + inside_outside
+# @ 0.60). RANSAC is the only difference vs general, and it is wrong for rigid
+# shelving (the floor-band drop buys nothing here and risks the bottom plinth).
+# inside_outside is the cleaner that removes the back/floor haze; its picker
+# uses the rigid "prefer-higher" prompt (auto-selected by label) which lands
+# the clean 0.60, while the collapse-guard blocks the body-collapsing rungs.
+# sam_low_refine reads 4_sam_tight directly (4a_floor_drop is absent). The old
+# bookshelf_sweep path skipped inside_outside and left a green haze, so it is
+# retired.
 BOOKSHELF_PRE_QC_STAGES = [
     STAGE_SAM_CARVE_S1, STAGE_SAM_CARVE_S2,
     STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
-    # STAGE_FLOOR_DROP RETIRED 2026-05-27 — same reason as general chain.
-    STAGE_SAM_TIGHT_BOOKSHELF,
-    STAGE_BOOKSHELF_SWEEP,
-    STAGE_BOOKSHELF_SWEEP_LOW,  # 2026-05-22 — second pass at low pitches
-                                 # (same Qwen-bbox-vote mechanism as
-                                 # bookshelf_sweep, just from below).
-    STAGE_FINAL_PICK,       # picks best from available stage outputs.
-    STAGE_DESTREAK,         # drop big+dark streak splats from 7_final.ply (2026-05-27)
+    STAGE_SAM_TIGHT_FROM_FLOOR,    # Pass A center, sources 2_sam_wide.ply
+    # NO floor_drop / RANSAC for shelving.
+    STAGE_SAM_LOW_REFINE,          # Pass B low — reads 4_sam_tight (4a absent)
+    STAGE_SAM_HIGH_REFINE,         # Pass C steep
+    STAGE_SWEEP_FALLBACK,          # Qwen-bbox vote refinement on 4_sam_tight
+    STAGE_INSIDE_OUTSIDE,          # multi-mask carve; rigid picker prompt → 0.60
+    STAGE_FINAL_PICK,              # 7_picked → destreak --auto → 8_final
 ]
 
 
 def run_bookshelf(scene: Path, obj_dir: Path) -> dict:
-    """Bookshelf chain (validated 2026-05-05 on 02_bookshelf):
-    sam_carve → floor_drop → sam_tight (looser: 0.5/0.05/0.15) →
-    bookshelf_sweep → info → qc_reject with bbox-sweep fallback retry.
-    Then companion_search to extract individual shelf items (books, vases,
-    picture frames, baskets, plants, etc.) as separate children."""
+    """Shelving / bookshelf / cabinet: EXACTLY the general chain minus
+    floor_drop (no RANSAC). inside_outside (rigid picker prompt, auto-selected
+    by label) + the collapse-guard land the clean 0.60 — reproducing the
+    verified-good v32 bookshelf + display-shelf result. Then split_children
+    for items-on-top (mirrors run_general; shelf contents stay in the unit)."""
     status = _run_chain(scene, obj_dir, BOOKSHELF_PRE_QC_STAGES)
     status = _post_extract_qc(scene, obj_dir, status)
-    if (obj_dir / "companions.json").exists():
-        status["companion_search"] = "skip"
-    else:
-        rc = subprocess.run([sys.executable,
-                              str(ITERATION_DIR / "companion_search.py"),
-                              str(scene), str(obj_dir)]).returncode
-        status["companion_search"] = "ok" if rc == 0 else f"fail({rc})"
+    # Split items sitting ON TOP of the shelf (plant, etc.) out to children;
+    # the books/vases/decor between shelves stay in the unit (as in the
+    # verified-good result).
+    if obj_dir.exists() and (obj_dir / "diagnostics" / "2_sam_wide" /
+                              "sam_prompt.txt").exists():
+        if (obj_dir / "children" / "manifest.json").exists():
+            status["split_children"] = "skip"
+        else:
+            rc = subprocess.run([sys.executable,
+                                  str(ITERATION_DIR / "split_children.py"),
+                                  str(scene), str(obj_dir)]).returncode
+            status["split_children"] = "ok" if rc == 0 else f"fail({rc})"
     return status
 
 
