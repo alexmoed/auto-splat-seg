@@ -30,7 +30,7 @@ flat; this doc provides the logical grouping instead.
 | **detection** (what's in the scene) | `inventory.py`, `_phase2_dioramas.py`, `_phase2_detect.py`, `_phase4_art_detect.py` |
 | **extraction → visual hull** | `extract_one.py`, `_phase3_extract_one.py`, `_phase4_art_extract.py` |
 | **per-object refine (SAM chain)** | `sam_carve.py`, `sam_tight.py`, `sam_low_refine.py`, `sam_high_refine.py`, `floor_drop.py`, `sweep_fallback.py`, `inside_outside.py`, `render_inside_views.py`, `splat_destreak.py`, `stage_pick.py` |
-| **class routes** | `tv_carve.py`, `rug_extract.py`, `bookshelf_sweep.py`, `companion_search.py` |
+| **class routes** | `tv_carve.py`, `rug_extract.py`, `companion_search.py` |
 | **grouping / children** | `group.py`, `subtract.py`, `split_children.py` |
 | **finalize** | `info.py`, `qc_reject.py`, `rename_to_qwen.py`, `merge_scene.py`, `extract_background.py`, `extract_final_outputs.py`, `ply_to_splat.py` |
 | **shared / orchestration** | `run_all.py`, `procedure_dispatch.py`, `stage_preference.py`, `sam_server.py` (service), `_vendored_view.py` / `docker/view.py` (render primitive — never move/merge) |
@@ -67,10 +67,13 @@ deliverable), resolved everywhere via `stage_preference.py`.
   → `inside_outside` (`6_inside_outside`) → `stage_pick`
   (`7_picked` → `7_destreak` → **`8_final`**) → `_post_extract_qc`
   (`qc_reject` + `info`) → `split_children`.
-- **bookshelf** — like general but **SKIPS `floor_drop`/RANSAC** (wrong for tall
-  shelving): `sam_carve` → `sam_tight_bookshelf` (looser vote) →
-  `bookshelf_sweep` + `bookshelf_sweep_low` → `stage_pick` → (`STAGE_DESTREAK` —
-  redundant, see BUGS_FIXED.md #11). Matches bookshelf/bookcase/shelving.
+- **bookshelf** — EXACTLY the general chain **minus `floor_drop`/RANSAC** (wrong
+  for tall shelving): `sam_carve` → `sam_tight` → `sam_low_refine` →
+  `sam_high_refine` → `sweep_fallback` → `inside_outside` (rigid picker prompt,
+  auto by label → 0.60) → `stage_pick`. Matches bookshelf/bookcase/shelf/
+  shelving. Reproduces the v32 bookshelf + display-shelf result. (Cabinets stay
+  on the general route WITH RANSAC but still get the rigid inside_outside
+  prompt.) The old `sam_tight_bookshelf`/`bookshelf_sweep` path is retired.
 - **lamp** — SKIPS `sam_tight` + `inside_outside` (erode the thin pole): promote
   `2_sam_wide` → `sweep_fallback` → `stage_pick` (+geom destreak).
 - **table** — `sam_carve` → `floor_drop` → STOP (skips `sam_tight`, which carves
@@ -90,7 +93,7 @@ would cut the most duplication without touching the topology:
 - `render_util.py` — `render_canonical_5` (2 copies: sam_carve vs floor_drop) +
   the topdown camera-math block duplicated across foundation modules.
 - `qwen_bbox.py` — bbox-sweep helpers duplicated across rug_extract /
-  bookshelf_sweep / sweep_fallback.
+  sweep_fallback.
 - camera math (`viewmat_look_at`/`build_K`/`project_to_pixels`/`slugify`) lives
   in `extract_one.py` and is imported by ~12 modules; could move to
   `camera_math.py` with `extract_one` kept as a re-export shim (it is also

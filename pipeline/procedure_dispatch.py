@@ -669,12 +669,13 @@ def decide_procedure(label: str) -> str:
     if LAMP_PATTERN.search(lo):
         return "lamp"
     # Bookshelf / shelving — route to the dedicated bookshelf procedure.
-    # Re-enabled 2026-05-29: bookshelves and shelving units get their ACTUAL
-    # procedure (sam_carve -> sam_tight_bookshelf -> bookshelf_sweep + low
-    # pass -> stage_pick -> destreak), NOT the general route. The defining
-    # difference is that this chain SKIPS floor_drop/RANSAC, which the general
-    # chain applies (4a_floor_drop) — RANSAC is wrong for a tall shelving
-    # profile. BOOKSHELF_PATTERN matches bookshelf / bookcase / shelving /
+    # 2026-05-29: the bookshelf procedure is EXACTLY the general chain MINUS
+    # floor_drop/RANSAC (sam_carve -> sam_tight -> sam_low/high refine ->
+    # sweep_fallback -> inside_outside [rigid picker prompt] -> stage_pick).
+    # RANSAC is the only difference vs general and is wrong for a tall shelving
+    # profile. (Cabinets stay on the general route WITH RANSAC, but still get
+    # the rigid inside_outside prompt by label.) BOOKSHELF_PATTERN matches
+    # bookshelf / bookcase / shelving /
     # shelving unit / open shelving.
     if BOOKSHELF_PATTERN.search(lo):
         return "bookshelf"
