@@ -28,18 +28,10 @@ from plyfile import PlyData, PlyElement
 ITERATION_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ITERATION_DIR))
 
-OBJECT_STAGE_PREFERENCE = [
-    "7_final",                 # stage_pick output — the picked best
-    "6_inside_outside",        # multi-mask final stage
-    "5_subtracted",
-    "5_bookshelf_sweep",
-    "4_rug",
-    "5_sweep_fallback",
-    "4_sam_tight",
-    "3_floor_drop",
-    "2_pitch_sweep_refined",   # phase 4 wall art
-    "1_visual_hull",           # companions
-]
+# Object stage preference is the shared canonical list (stage_preference.py),
+# led by stage_pick's 8_final. Previously this led with the never-written
+# 7_final, so scene reassembly used a pre-pick/pre-destreak object PLY.
+from stage_preference import STAGE_PREFERENCE as OBJECT_STAGE_PREFERENCE  # noqa: E402
 
 
 def find_object_ply(obj_dir: Path) -> tuple[Path | None, str | None]:

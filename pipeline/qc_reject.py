@@ -8,9 +8,9 @@ fragments are all PASS. Reject ONLY when Qwen "cannot make out the
 object at all" across all 5 canonical views.
 
 Sends all 5 canonical renders (y0, y90, y180, y270, topdown) of the
-latest stage's output (5_bookshelf_sweep > 4_sam_tight > 3_floor_drop >
-2_sam_wide > 1_visual_hull, in that preference order) to Qwen as a
-multi-image request.
+object's most-refined stage (the shared stage_preference order, led by
+stage_pick's 8_final) to Qwen as a multi-image request. Picks the latest
+stage that actually has all 5 canonical renders on disk.
 
 Reads:
   <obj>/renders/<stage>/{y0,y90,y180,y270,topdown}.png
@@ -43,23 +43,12 @@ QWEN_MODEL = "qwen36-awq"
 
 VIEWS = ["y0", "y90", "y180", "y270", "topdown"]
 
-# Stage preference order — pick the latest stage that has all 5 renders.
-STAGE_PREFERENCE = [
-    # 7_final = stage_pick's chosen best. This gate runs AFTER stage_pick,
-    # so 7_final exists and is what we judge — the picked result.
-    # 5_subtracted = parent with children carved out (group/subtract).
-    # 5_bookshelf_sweep / 4_rug = class-specific finals.
-    # The rest are earlier stages, only reached if 7_final is absent.
-    "7_final",
-    "5_subtracted",
-    "5_bookshelf_sweep",
-    "4_rug",
-    "4_sam_tight",
-    "5_sweep_fallback",
-    "3_floor_drop",
-    "2_sam_wide",
-    "1_visual_hull",
-]
+# Stage preference order is the shared canonical list (stage_preference.py).
+# This gate runs AFTER stage_pick, so 8_final (its picked + destreaked output)
+# is at the top and is what we judge. qc_reject picks the latest stage that has
+# all 5 canonical RENDERS on disk (not just the .ply) — see the loop below.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stage_preference import STAGE_PREFERENCE  # noqa: E402
 
 
 def encode_b64(p: Path, max_dim: int = 1024) -> str:

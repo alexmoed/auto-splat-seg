@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Stage 7 — final stage picker.
+"""Stages 7 + 8 — final stage picker + destreak.
 
-Picks one candidate PLY from the pipeline chain — 4_sam_tight,
-4b_sam_tight_low, 5_sweep_fallback, 6_inside_outside — copies to
-7_final.ply, converts to final.splat, renders canonical 5, and renames
-the obj_dir to the refined label slug.
+Picks one candidate PLY from the pipeline chain (see CANDIDATE_PLYS:
+3_floor_drop, 4_sam_tight, 4b_sam_tight_low, 5_bookshelf_sweep,
+5b_bookshelf_sweep_low, 5_sweep_fallback, 6_inside_outside), copies it to
+7_picked.ply, runs `splat_destreak --auto` to 7_destreak.ply, then
+promotes the result to **8_final.ply** (the shipped deliverable), converts
+to final.splat, renders canonical 5, and renames the obj_dir to the
+refined label slug. NOTE: the current code writes 8_final.ply, NOT
+7_final.ply — every finalize consumer resolves the final stage via the
+shared stage_preference.py list, which leads with 8_final.
 
 PICK METHOD (2026-05-20): hardcoded preference order
   inside_outside → sweep_fallback → sam_tight_low → sam_tight
