@@ -361,10 +361,34 @@ def main():
         pipe_union = (sam_prompt_path.read_text().strip()
                        if sam_prompt_path.exists() else "")
 
-        print(f"[auto] 3-threshold sweep: {SWEEP_3}")
+        print(f"[auto] threshold sweep: {SWEEP_3}")
         cands = evaluate(SWEEP_3, "sweep")
-        ci = qwen_pick(cands, label, pipe_union=pipe_union)
-        thresh = cands[ci]["thresh"]
+        # Collapse-guard (2026-05-29): a threshold whose kept-fraction falls
+        # off a CLIFF vs the previous (lower) threshold has carved away the
+        # object BODY, not just the floor halo — never offer it to the picker.
+        # Drop the first collapsing candidate and every stricter one.
+        # Regression context: 478a866 expanded SWEEP_3 with 0.75/0.85 for
+        # bookshelves; on the grey armchair 0.60 kept 89% (clean, = the v32
+        # bar) but 0.75 kept only 50% (body gone) and Qwen picked it. A clean
+        # carve step drops only a few %; a structural collapse drops tens of %.
+        # Rigid objects (bookshelf) don't collapse at 0.75 (~5% drop) so they
+        # keep the high rungs.
+        COLLAPSE_DROP = 0.22   # relative kept-fraction drop signalling collapse
+        kept_cands = [cands[0]]
+        for prev, cur in zip(cands, cands[1:]):
+            pf = prev["frac_kept"]
+            rel_drop = (pf - cur["frac_kept"]) / pf if pf > 0 else 1.0
+            if rel_drop > COLLAPSE_DROP:
+                print(f"[auto] collapse-guard: thr {cur['thresh']:.2f} drops "
+                      f"{100*rel_drop:.0f}% vs {prev['thresh']:.2f} "
+                      f"(body collapse) — excluding it + all stricter thresholds")
+                break
+            kept_cands.append(cur)
+        if len(kept_cands) < len(cands):
+            print(f"[auto] picker sees safe thresholds only: "
+                  f"{[c['thresh'] for c in kept_cands]}")
+        ci = qwen_pick(kept_cands, label, pipe_union=pipe_union)
+        thresh = kept_cands[ci]["thresh"]
         print(f"[auto] Qwen-chosen threshold = {thresh:.2f}")
     else:
         thresh = args.keep_thresh
