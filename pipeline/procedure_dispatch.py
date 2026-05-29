@@ -683,12 +683,16 @@ def decide_procedure(label: str) -> str:
     # LAMP_PATTERN (no floor/standing) and stay on their existing route.
     if LAMP_PATTERN.search(lo):
         return "lamp"
-    # Bookshelf route RETIRED from auto-routing 2026-05-22 — the general
-    # route extracts bookshelves at least as cleanly (validated on the
-    # light-wood + tall metal-frame bookshelves) and keeps the pipeline
-    # simpler. The bookshelf procedure is still defined and reachable via
-    # an explicit `--procedure bookshelf` (kept for website renders).
-    # BOOKSHELF_PATTERN is left in place for that manual path.
+    # Bookshelf / shelving — route to the dedicated bookshelf procedure.
+    # Re-enabled 2026-05-29: bookshelves and shelving units get their ACTUAL
+    # procedure (sam_carve -> sam_tight_bookshelf -> bookshelf_sweep + low
+    # pass -> stage_pick -> destreak), NOT the general route. The defining
+    # difference is that this chain SKIPS floor_drop/RANSAC, which the general
+    # chain applies (4a_floor_drop) — RANSAC is wrong for a tall shelving
+    # profile. BOOKSHELF_PATTERN matches bookshelf / bookcase / shelving /
+    # shelving unit / open shelving.
+    if BOOKSHELF_PATTERN.search(lo):
+        return "bookshelf"
     if RUG_PATTERN.search(lo):
         return "rug"
     if TABLE_PATTERN.search(lo) and not TABLE_EXCLUDE.search(lo):
