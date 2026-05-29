@@ -135,13 +135,14 @@ def qwen_pick(candidates, label, pipe_union=""):
     pipe_union: the sam_prompt.txt pipe-union string (main + sub-items).
     Returns the index Qwen picks.
 
-    Prompt (rewritten 2026-05-29): COMPLETENESS FIRST — never pick a
-    candidate that destroys/hollows the object body or drops a sub-item, no
-    matter how clean it looks; among fully-intact candidates prefer the one
-    that removes the most floor/halo; when close, prefer the safer (lower)
-    strength. The old wording biased toward HIGHER strength, which let Qwen
-    pick a body-collapsing threshold (armchair 0.75 → 50% kept). Paired with
-    the mechanical collapse-guard in main() as defence-in-depth."""
+    Prompt is CLASS-SPECIFIC (2026-05-29):
+      - RIGID storage (cabinet / bookshelf / shelving) → the OLD v32 prompt
+        ("disqualify eroded, then PREFER the HIGHER strength"), which landed
+        the clean 0.60 on the v32 bookshelf + display shelf.
+      - SOFT / other furniture → conservative completeness-first prompt (the
+        aggressive bias over-carved soft bodies — armchair @ 0.75).
+    The mechanical collapse-guard in main() removes the body-collapsing rungs
+    for BOTH before this pick, so 'prefer higher' can't run off the cliff."""
     content = []
     for i, c in enumerate(candidates):
         content.append({"type": "text",
@@ -151,41 +152,77 @@ def qwen_pick(candidates, label, pipe_union=""):
         for rp in c["renders"]:
             content.append({"type": "image_url", "image_url": {
                 "url": f"data:image/png;base64,{encode_b64(rp)}"}})
-    content.append({"type": "text", "text":
-        f"Each numbered candidate shows the SAME extracted '{label}', "
-        f"cleaned at an increasing strength (higher strength removes more "
-        f"surrounding contamination but eventually starts eating the object "
-        f"itself). The pipe-union the upstream SAM step used was:\n\n"
-        f"  {pipe_union}\n\n"
-        f"The MAIN object is '{label}'. The SUB-ITEMS listed above "
-        f"(pillows, throws, blankets, lamps, decor, hardware, etc.) are also "
-        f"part of this extraction and must be preserved.\n\n"
-        f"RULE #1 — NEVER CHOOSE A CANDIDATE THAT DESTROYS THE OBJECT. The "
-        f"complete '{label}' must be present and SOLID: its body / seat / "
-        f"back / arms / frame and every sub-item must be fully there — not "
-        f"hollowed out, fragmented, reduced to a thin shell, or partly "
-        f"missing. A candidate that looks 'cleaner' but is missing the body "
-        f"or large chunks of the object is DESTROYED and is DISQUALIFIED no "
-        f"matter how little floor/halo it has. If you can no longer clearly "
-        f"see the whole object in a candidate, that candidate is wrong — "
-        f"never pick it.\n\n"
-        f"RULE #2 — Among ONLY the candidates where the object and all "
-        f"sub-items are FULLY INTACT and solid, pick the one that removes "
-        f"the most contamination (floor halo / smear under the object / "
-        f"wisps / neighbouring furniture / walls / capture noise). Slight "
-        f"thinning of legs/feet is acceptable; a missing, broken, or "
-        f"floating-with-a-gap leg is not.\n\n"
-        f"RULE #3 — The BEST candidate is the HIGHEST strength at which the "
-        f"object is STILL COMPLETELY INTACT: that removes the most floor/halo "
-        f"while keeping the whole object. Do NOT settle for a low strength "
-        f"that leaves visible floor halo / smear / clutter when a higher "
-        f"strength is still fully intact. Step DOWN a strength only if the "
-        f"higher one loses ANY of the object's body or sub-items. "
-        f"(A mechanical guard already removed the strengths that collapse the "
-        f"object, so among the choices shown, more cleaning is better — as "
-        f"long as the object stays whole.)\n\n"
-        f"Reply with ONLY the candidate number (1 to "
-        f"{len(candidates)}). No other text."})
+    # ── Class-specific picker prompt ──────────────────────────────────────
+    # RIGID storage (cabinets / bookshelves / shelving) has hard edges and
+    # delicate shelf clutter: the OLD v32 prompt ("disqualify eroded, then
+    # PREFER the HIGHER strength") reliably landed the clean 0.60 there. SOFT
+    # / other furniture keeps the conservative completeness-first prompt — the
+    # aggressive bias over-carves soft upholstered bodies (armchair @ 0.75).
+    # The mechanical collapse-guard in main() removes the body-collapsing rungs
+    # for BOTH before this pick, so "prefer higher" can't run off the cliff.
+    lo = (label or "").lower()
+    is_rigid_shelving = any(k in lo for k in (
+        "cabinet", "cupboard", "bookshelf", "bookcase", "book shelf",
+        "shelf", "shelves", "shelving", "etagere", "etagère", "étagère",
+        "sideboard", "credenza", "hutch"))
+    if is_rigid_shelving:
+        # OLD v32 prompt — validated on the v32 bookshelf + display shelf
+        # (both picked 0.60 cleanly).
+        instruction = (
+            f"Each numbered candidate shows the SAME extracted '{label}', "
+            f"cleaned at an increasing strength. The pipe-union the upstream "
+            f"SAM step used was:\n\n  {pipe_union}\n\n"
+            f"The MAIN object is '{label}'. The SUB-ITEMS listed above (books, "
+            f"vases, plants, baskets, decor, hardware, etc.) are also part of "
+            f"this extraction and must be preserved.\n\n"
+            f"Anything else in the renders — floor halo / smear under or "
+            f"behind the object, wisps, neighbouring furniture, walls, capture "
+            f"noise — is contamination this step is removing. Higher strength "
+            f"removes more contamination but eventually starts eroding the "
+            f"frame, shelves, or shelf items.\n\n"
+            f"**DISQUALIFY** any candidate where:\n"
+            f"- The frame / shelves / body of the '{label}' is eroded, broken, "
+            f"or has chunks missing\n"
+            f"- Any shelf item (book, vase, plant, decor, hardware) is gone, "
+            f"eroded, or thinned\n\n"
+            f"Among candidates that PASS the disqualification rules, **PREFER "
+            f"THE HIGHER-STRENGTH (more aggressive) CANDIDATE** — it removes "
+            f"the most floor/background haze — as long as the frame, shelves, "
+            f"and every shelf item are clearly intact. Only fall back to a "
+            f"lower strength if the higher one shows clear damage to the "
+            f"object or a shelf item.\n\n"
+            f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
+            f"No other text.")
+    else:
+        # Conservative completeness-first prompt for soft / other furniture.
+        instruction = (
+            f"Each numbered candidate shows the SAME extracted '{label}', "
+            f"cleaned at an increasing strength (higher strength removes more "
+            f"surrounding contamination but eventually starts eating the "
+            f"object itself). The pipe-union the upstream SAM step used was:"
+            f"\n\n  {pipe_union}\n\n"
+            f"The MAIN object is '{label}'. The SUB-ITEMS listed above "
+            f"(pillows, throws, blankets, lamps, decor, hardware, etc.) are "
+            f"also part of this extraction and must be preserved.\n\n"
+            f"RULE #1 — NEVER CHOOSE A CANDIDATE THAT DESTROYS THE OBJECT. The "
+            f"complete '{label}' must be present and SOLID: its body / seat / "
+            f"back / arms / frame and every sub-item must be fully there — not "
+            f"hollowed out, fragmented, reduced to a thin shell, or partly "
+            f"missing. A candidate that looks 'cleaner' but is missing the "
+            f"body or large chunks of the object is DESTROYED and is "
+            f"DISQUALIFIED no matter how little floor/halo it has.\n\n"
+            f"RULE #2 — Among ONLY the candidates where the object and all "
+            f"sub-items are FULLY INTACT and solid, pick the one that removes "
+            f"the most contamination (floor halo / smear under the object / "
+            f"wisps / neighbouring furniture / walls / capture noise). Slight "
+            f"thinning of legs/feet is acceptable; a missing, broken, or "
+            f"floating-with-a-gap leg is not.\n\n"
+            f"RULE #3 — Prefer the HIGHEST strength at which the object is "
+            f"STILL COMPLETELY INTACT (removes the most halo). Step down only "
+            f"if the higher one loses ANY of the object's body or sub-items.\n\n"
+            f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
+            f"No other text.")
+    content.append({"type": "text", "text": instruction})
 
     payload = json.dumps({
         "model": QWEN_MODEL,
