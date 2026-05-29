@@ -28,10 +28,13 @@ Usage:
     python procedure_dispatch.py <scene_dir> <obj_dir> --procedure general
 """
 import argparse
+import base64
 import json
+import os
 import re
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 ITERATION_DIR = Path(__file__).resolve().parent
@@ -686,6 +689,72 @@ def decide_procedure(label: str) -> str:
     return "general"
 
 
+# ───── route double-check (Qwen) ────────────────────────────────────────
+
+# The one label confusion that flips RANSAC on/off is cabinet <-> open
+# shelving (shelving = no-RANSAC bookshelf route; cabinet = general+RANSAC).
+# Detection occasionally mislabels an open shelving unit as a "cabinet" (or
+# vice-versa). This regex gates the (cheap) Qwen sanity check to ONLY those
+# ambiguous storage labels — everything else trusts the rule.
+_STORAGE_AMBIGUOUS = re.compile(
+    r"\b(cabinet|cupboard|sideboard|console|credenza|hutch|bookshelf|bookcase|"
+    r"book[- ]?shelf|shelf|shelves|shelving|etagere|etag[eè]re|étag[eè]re)\b",
+    re.IGNORECASE)
+
+
+def route_double_check(obj_dir: Path, label: str, decided: str) -> str:
+    """Light Qwen sanity check on the cabinet<->open-shelving routing ambiguity
+    (the only label confusion that flips RANSAC). Fires ONLY for storage labels.
+    Looks at the coarse-hull renders and asks open-shelving vs closed-cabinet;
+    re-routes if the rule got it wrong. FAIL-SAFE: returns `decided` unchanged on
+    any error / unsure / missing render — never breaks the route. (Rare in
+    practice, so the extra Qwen call only happens for storage-class labels.)"""
+    if not _STORAGE_AMBIGUOUS.search(label or ""):
+        return decided
+    imgs = [obj_dir / "renders" / "1_visual_hull" / v for v in ("y0.png", "y90.png")]
+    imgs = [p for p in imgs if p.exists()]
+    if not imgs:
+        return decided
+    try:
+        content = [{"type": "text", "text":
+            f"This object is currently labelled '{label}'. Looking at the "
+            f"renders: is it an OPEN SHELVING UNIT / bookshelf (open shelves "
+            f"with visible items, NO doors or drawers) or a CLOSED CABINET "
+            f"(doors and/or drawers, contents hidden)? Reply with ONE word only: "
+            f"open_shelving OR closed_cabinet OR unsure."}]
+        for p in imgs:
+            b64 = base64.b64encode(p.read_bytes()).decode()
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64}"}})
+        payload = json.dumps({
+            "model": os.environ.get("QWEN_MODEL", "qwen36-awq"),
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 16, "temperature": 0.0,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }).encode()
+        url = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1") + "/chat/completions"
+        req = urllib.request.Request(url, data=payload,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            ans = json.loads(r.read())["choices"][0]["message"]["content"].strip().lower()
+    except Exception as e:
+        print(f"  [route-check] skipped ({e}) — keeping rule-based '{decided}'")
+        return decided
+    if "open" in ans and "shelv" in ans:
+        if decided != "bookshelf":
+            print(f"  [route-check] '{label}' reads as OPEN SHELVING — "
+                  f"re-routing {decided} -> bookshelf (no RANSAC)")
+        return "bookshelf"
+    if "closed" in ans and "cabinet" in ans:
+        if decided == "bookshelf":
+            print(f"  [route-check] '{label}' reads as a CLOSED CABINET — "
+                  f"re-routing bookshelf -> general (RANSAC)")
+            return "general"
+        return decided
+    print(f"  [route-check] unsure ('{ans}') — keeping rule-based '{decided}'")
+    return decided
+
+
 # ───── main ────────────────────────────────────────────────────────────
 
 def main():
@@ -713,6 +782,10 @@ def main():
             pass
 
     procedure = args.procedure or decide_procedure(label)
+    # Double-check the rule's pick on the cabinet<->open-shelving axis (the
+    # only ambiguity that flips RANSAC). Skipped when --procedure is forced.
+    if args.procedure is None:
+        procedure = route_double_check(obj, label, procedure)
     print(f"[dispatch] obj={obj.name}  label='{label}'  procedure={procedure}")
 
     fn = PROCEDURES[procedure]
