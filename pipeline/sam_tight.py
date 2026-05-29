@@ -721,7 +721,8 @@ def main():
         "prompt_classes": prompt_classes,
         "sam_pad_hard_m": args.sam_pad_hard_m,
         "sam_pad_fabric_m": args.sam_pad_fabric_m,
-        "min_views_frac": args.min_views_frac,
+        "min_views_frac_arg": args.min_views_frac,   # the requested arg
+        "min_views_frac": eff_frac,                  # the EFFECTIVE (scaled/auto-picked) frac actually used
         "n_views_total": n_views,
         "required_votes": required,
         "n_in": n_in,

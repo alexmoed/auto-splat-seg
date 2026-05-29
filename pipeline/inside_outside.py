@@ -50,7 +50,6 @@ MIN_MASK_PX = 2000
 # 0.60 with the new prompt. 0.30 is just above the prior fixed default
 # (0.25) — light end. 0.60 is the aggressive end. 0.45 is the middle.
 SWEEP_3 = [0.30, 0.45, 0.60, 0.75, 0.85]  # expanded 2026-05-27 — bookshelf wanted higher than 0.60; let Qwen pick across the full ladder including the high-strength end.
-THR_MIN, THR_MAX = 0.1, 0.7
 FOV, W, H = 70.0, 1920, 1080
 # Candidate sweep renders shown to Qwen are framed WIDE (object well
 # inside the frame with margin) so Qwen can actually see the legs/feet
@@ -59,16 +58,10 @@ QWEN_VIEW_MARGIN = 2.05
 QWEN_URL = "http://127.0.0.1:8000/v1"
 QWEN_MODEL = "qwen36-awq"
 
-# Bookshelves / open shelving are EXEMPT: their structure is too open
-# (shelves, gaps, items inside) for a silhouette inside/outside carve —
-# the test would wrongly cut interior contents and see-through gaps.
-SHELVING_KEYWORDS = ("bookshelf", "bookcase", "book shelf", "shelving",
-                     "shelf", "etagere", "etagère", "étagère")
-
-
-def is_shelving(label):
-    lo = (label or "").lower()
-    return any(k in lo for k in SHELVING_KEYWORDS)
+# (Retired 2026-05-29: the old is_shelving()/SHELVING_KEYWORDS exemption that
+# skipped the inside/outside carve for shelving is dead — shelving now runs the
+# carve like everything else, gated by the class-aware picker + capped sweep
+# (is_rigid_shelving). Removed to avoid a stale duplicate keyword set.)
 
 
 # ----------------------------------------------------------------------

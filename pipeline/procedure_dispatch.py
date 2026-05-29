@@ -159,24 +159,9 @@ STAGE_FINAL_PICK = (
 # `splat_destreak --auto` internally (7_picked -> 7_destreak -> 8_final), so
 # the standalone stage was a redundant re-run with a never-matching marker.
 # splat_destreak.py itself stays — stage_pick uses it.)
-STAGE_INFO = (
-    "info",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "info.py"),
-                  str(s), str(o)],
-    "info.json",
-)
-# Final QC: lenient Qwen check on the latest stage's 5 canonical
-# renders. PASS = keep. REJECT (heavily damaged / unrecognizable noise)
-# = move whole folder to <scene>/rejects/. Marker is qc_reject.json,
-# which the script always writes — re-running on a kept object is a
-# no-op via the marker check. (Rejected folders move out, so they
-# can't be re-checked here.)
-STAGE_QC_REJECT = (
-    "qc_reject",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "qc_reject.py"),
-                  str(s), str(o)],
-    "qc_reject.json",
-)
+# (Retired 2026-05-29: STAGE_INFO + STAGE_QC_REJECT stage tuples were dead —
+# info + qc_reject run via _run_info / _run_qc / _post_extract_qc directly, not
+# as _run_chain stages. Removed.)
 
 
 def _run_chain(scene: Path, obj_dir: Path, stages: list) -> dict:
