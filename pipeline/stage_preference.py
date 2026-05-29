@@ -28,11 +28,18 @@ Order = most-refined / latest stage first. The first entry whose
 # consumers historically referenced, plus 8_final at the top (the fix).
 #
 # Rationale for the notable orderings:
+#   9_subtracted       parent body with child AABBs carved out of its OWN final
+#                      stage (group/subtract). Ranks ABOVE 8_final so a compound
+#                      parent ships WITHOUT its children double-counted; only
+#                      exists for parents that actually have children, so a
+#                      childless object still resolves to 8_final.
 #   8_final            stage_pick's picked + destreaked result — THE deliverable
 #   7_final            legacy stage_pick output name (older code); kept so an
 #                      object carrying only a stale 7_final still resolves
 #   6_inside_outside   multi-mask insideness carve (last stage before pick)
-#   5_subtracted       parent body with child AABBs carved out (group/subtract)
+#   5_subtracted       LEGACY parent-minus-children name (pre-9_subtracted); kept
+#                      below 8_final only so old scenes still resolve — current
+#                      subtract.py writes 9_subtracted (above 8_final) instead
 #   5_bookshelf_sweep  bookshelf-route class final
 #   4_rug              rug-route class final
 #   5_sweep_fallback   Qwen-bbox vote refinement that runs AFTER 4_sam_tight,
@@ -44,6 +51,7 @@ Order = most-refined / latest stage first. The first entry whose
 #   2_sam_wide         wide SAM carve
 #   1_visual_hull      coarse hull (companions / last-ditch fallback)
 STAGE_PREFERENCE = [
+    "9_subtracted",
     "8_final",
     "7_final",
     "6_inside_outside",

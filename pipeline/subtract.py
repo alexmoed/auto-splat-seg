@@ -2,13 +2,24 @@
 """subtract.py — remove child splats from parent PLYs.
 
 Reads <scene>/scene_hierarchy.json (written by group.py). For each parent
-with children, drops splats from the parent's 4_sam_tight.ply that fall
+with children, drops splats from the parent's CURRENT FINAL stage that fall
 inside any child's tight 3D AABB (with a small safety pad). Saves the
-result as 5_subtracted.ply + canonical renders.
+result as 9_subtracted.ply + canonical renders.
 
-Objects with no children get NO 5_subtracted.ply — their 4_sam_tight.ply
-remains the final output. The manifest tells you which is the canonical
-final per object.
+IMPORTANT (2026-05-29 fix): the parent's shipped output is its picked +
+destreaked 8_final.ply, NOT 4_sam_tight.ply. Subtracting from the stale
+4_sam_tight (the old behaviour) produced a 5_subtracted.ply that every
+finalize consumer then IGNORED, because 8_final outranks 5_subtracted in
+stage_preference — so compound parents shipped with their children
+double-counted (embedded in the parent AND shipped as their own .splat).
+We now (a) read the parent's current final via stage_preference.pick_stage
+and (b) write 9_subtracted.ply, which ranks ABOVE 8_final, so the carved
+parent becomes the actual final. Children's AABBs are taken from each
+child's own final stage. Both reads EXCLUDE 9_subtracted so a re-run reads
+the upstream final, never its own output.
+
+Objects with no children get NO 9_subtracted.ply — their 8_final.ply
+remains the final output (childless objects are unchanged).
 
 Usage:
     python subtract.py <scene_dir>
@@ -26,6 +37,14 @@ sys.path.insert(0, str(ITERATION_DIR))
 # Use the SAME canonical render the rest of the pipeline uses — never
 # invent new orbit / camera math.
 from sam_carve import render_canonical_5  # noqa: E402
+# Single source of truth for "which stage is an object's final output".
+from stage_preference import pick_stage, STAGE_PREFERENCE  # noqa: E402
+
+# This subtract result outranks 8_final so the carved parent ships as final.
+OUT_STAGE = "9_subtracted"
+# Resolve the parent/child final stage from everything EXCEPT our own output,
+# so a re-run subtracts from the upstream final (8_final), not 9_subtracted.
+UPSTREAM_STAGES = [s for s in STAGE_PREFERENCE if s != OUT_STAGE]
 
 # Tighter AABB for child than parent grouping rule used (we want to ONLY
 # remove splats that are unambiguously the child, not borderline ones).
@@ -69,17 +88,20 @@ def main():
             continue
 
         parent_dir = scene / parent_slug
-        parent_ply = parent_dir / "4_sam_tight.ply"
-        if not parent_ply.exists():
-            print(f"  [{parent_slug}] SKIP — no 4_sam_tight.ply")
+        # Subtract from the parent's CURRENT final stage (8_final), not the
+        # stale 4_sam_tight. Exclude 9_subtracted so a re-run reads the
+        # upstream final rather than its own previous output.
+        parent_stage, parent_ply = pick_stage(parent_dir, candidates=UPSTREAM_STAGES)
+        if parent_ply is None:
+            print(f"  [{parent_slug}] SKIP — no final-stage PLY")
             continue
 
-        # Collect each child's AABB
+        # Collect each child's AABB from the child's own final stage.
         child_aabbs = []
         for c_slug in children:
-            c_ply = scene / c_slug / "4_sam_tight.ply"
-            if not c_ply.exists():
-                print(f"  [{parent_slug}] WARN — child {c_slug} has no 4_sam_tight.ply, skipping")
+            _, c_ply = pick_stage(scene / c_slug, candidates=UPSTREAM_STAGES)
+            if c_ply is None:
+                print(f"  [{parent_slug}] WARN — child {c_slug} has no final-stage PLY, skipping")
                 continue
             aabb = child_tight_aabb(c_ply)
             if aabb is not None:
@@ -108,16 +130,18 @@ def main():
         n_kept = int(keep.sum())
         n_dropped = int(drop.sum())
 
-        out_ply = parent_dir / "5_subtracted.ply"
+        out_ply = parent_dir / f"{OUT_STAGE}.ply"
         PlyData([PlyElement.describe(v.data[keep], "vertex")],
                 text=False).write(str(out_ply))
 
-        print(f"  [{parent_slug}] {n0:,} → {n_kept:,}  "
-              f"(dropped {n_dropped:,})  per-child:{per_child_drops}")
+        print(f"  [{parent_slug}] from {parent_stage}: {n0:,} → {n_kept:,}  "
+              f"(dropped {n_dropped:,})  per-child:{per_child_drops}  → {OUT_STAGE}.ply")
 
         # Canonical renders via the shared locked function (same as
-        # sam_tight, floor_drop, sam_carve all use).
-        renders_dir = parent_dir / "renders" / "5_subtracted"
+        # sam_tight, floor_drop, sam_carve all use). qc_reject/info pick the
+        # final stage by the presence of its 5 canonical renders, so this
+        # stage must have them.
+        renders_dir = parent_dir / "renders" / OUT_STAGE
         render_canonical_5(out_ply, renders_dir)
         print(f"    renders: {renders_dir}")
 

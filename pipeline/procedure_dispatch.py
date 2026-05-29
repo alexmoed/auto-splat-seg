@@ -421,11 +421,48 @@ def _post_extract_qc(scene: Path, obj_dir: Path, status: dict,
     return status
 
 
+def _read_meta_label(obj_dir: Path) -> str:
+    """Best-effort read of the object's free-text label from its hull meta."""
+    mp = obj_dir / "1_visual_hull_meta.json"
+    if mp.exists():
+        try:
+            return json.load(open(mp)).get("label", "") or ""
+        except Exception:
+            pass
+    return ""
+
+
+# Storage furniture that is CATEGORICALLY wall-flush (its back face sits
+# against the wall and isn't worth imaging) and routes to the GENERAL chain
+# (keeps RANSAC). These get the SAME front-arc assertion as the bookshelf
+# route — otherwise a misfired per-object wall-adjacency check silently falls
+# back to a full 360 orbit and over-carves the base (the exact regression the
+# bookshelf route was fixed for, 2026-05-29). _assert_wall_adjacent only
+# ENABLES the geometric compute_wall_skip, which self-no-ops for a genuinely
+# freestanding unit (>2.5m from every wall), so asserting is safe. Chairs /
+# sofas are deliberately NOT here — their backs are real geometry we want.
+_WALL_FLUSH_STORAGE_KW = (
+    "cabinet", "cupboard", "sideboard", "credenza", "hutch", "buffet",
+    "dresser", "wardrobe", "armoire", "chest of drawers", "console")
+
+
+def is_wall_flush_storage(label) -> bool:
+    lo = (label or "").lower()
+    return any(k in lo for k in _WALL_FLUSH_STORAGE_KW)
+
+
 def run_general(scene: Path, obj_dir: Path) -> dict:
     """sam_carve → floor_drop → sam_tight → [bbox-sweep fallback if
     needed] → info → qc_reject (with fallback retry) → reject if both
     QC passes fail. Then split_children to break items-on-top out of
-    the parent (sideboard → lamp, picture frame, vases, etc.)."""
+    the parent (sideboard → lamp, picture frame, vases, etc.).
+
+    Wall-flush storage furniture (cabinet/sideboard/credenza/...) asserts
+    front-arc imaging up front, same as the bookshelf route — see
+    _assert_wall_adjacent / is_wall_flush_storage. (Cabinets keep RANSAC,
+    which is the general chain; they ALSO get front-arc.)"""
+    if is_wall_flush_storage(_read_meta_label(obj_dir)):
+        _assert_wall_adjacent(obj_dir)   # front-arc for wall-flush storage — DO NOT REMOVE
     status = _run_chain(scene, obj_dir, GENERAL_PRE_QC_STAGES)
     status = _post_extract_qc(scene, obj_dir, status)
     # If the object survived QC (still on disk), split items-on-top.
