@@ -185,7 +185,12 @@ def _run_chain(scene: Path, obj_dir: Path, stages: list) -> dict:
         print(f"  [{name}] running...")
         r = subprocess.run(mkcmd(scene, obj_dir))
         if r.returncode != 0:
-            status[name] = f"fail({r.returncode})"
+            # Optional-stage failures get a NON-'fail' status so the dispatch
+            # exit gate (sys.exit(2) trips on any 'fail(...)') doesn't report a
+            # fully-extracted, QA-passed object as failed just because a
+            # tolerated optional refine pass (sam_low/high_refine) hiccuped.
+            status[name] = (f"optional_fail({r.returncode})" if optional
+                            else f"fail({r.returncode})")
             print(f"  [{name}] FAIL exit={r.returncode}"
                   f"{' (optional, continuing)' if optional else ''}")
             if not optional:
@@ -706,7 +711,7 @@ TV_EXCLUDE        = re.compile(r"\b(stand|console|cabinet|unit|table)\b",
 # etc.; a wall-mounted "floating shelf" also routes here (no floor_drop, fine).
 BOOKSHELF_PATTERN = re.compile(
     r"\b(bookshelf|book[- ]?shelf|bookcase|shelving(?:\s+unit)?|open\s+shelving"
-    r"|shelf|shelves)\b",
+    r"|etagere|etag[eè]re|étag[eè]re|shelf|shelves)\b",
     re.IGNORECASE)
 RUG_PATTERN = re.compile(
     r"\b(rug|carpet|area\s+rug|floor\s+mat|runner)\b", re.IGNORECASE)
