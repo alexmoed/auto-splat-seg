@@ -647,8 +647,13 @@ TV_PATTERN        = re.compile(
     r"\b(tv|television|monitor|screen|flat[- ]?screen)\b", re.IGNORECASE)
 TV_EXCLUDE        = re.compile(r"\b(stand|console|cabinet|unit|table)\b",
                                re.IGNORECASE)
+# Bookshelf / bookcase / any shelving unit (incl. "display shelf", "wall shelf",
+# "wooden shelf") — all tall open shelving that wants the no-RANSAC bookshelf
+# procedure. The bare \bshelf\b / \bshelves\b alts catch "wooden display shelf"
+# etc.; a wall-mounted "floating shelf" also routes here (no floor_drop, fine).
 BOOKSHELF_PATTERN = re.compile(
-    r"\b(bookshelf|book[- ]?shelf|bookcase|shelving(?:\s+unit)?|open\s+shelving)\b",
+    r"\b(bookshelf|book[- ]?shelf|bookcase|shelving(?:\s+unit)?|open\s+shelving"
+    r"|shelf|shelves)\b",
     re.IGNORECASE)
 RUG_PATTERN = re.compile(
     r"\b(rug|carpet|area\s+rug|floor\s+mat|runner)\b", re.IGNORECASE)
