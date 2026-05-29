@@ -497,12 +497,60 @@ BOOKSHELF_PRE_QC_STAGES = [
 ]
 
 
+def _assert_wall_adjacent(obj_dir: Path) -> None:
+    """Bake the front-arc imaging assumption into the bookshelf ROUTE.
+
+    A bookshelf / shelving unit is CATEGORICALLY against a wall, so its
+    back-hemisphere views see only wall and MUST be skipped (front-arc
+    imaging — image the open front, not the wall-flush back). v32 got
+    this right ONLY because the per-object Qwen wall-adjacency check
+    happened to write wall_adjacent:true. That check can fail silently
+    (empty / false wall_adjacent.json) — when it does, sam_tight images
+    the full 360° orbit, which roughly DOUBLES the SAM mask count
+    (v32: 26 masks → current misfire: 58), and the extra back/wall-side
+    masks drag the bottom-shelf splats below the inside_outside cutoff →
+    the bottom shelf gets eaten. (This is the "why do we keep
+    re-deriving the same lesson" regression: a deliberate design
+    decision was encoded only in a flaky runtime guess + memory notes,
+    so every chain rework re-rolls the dice.)
+
+    So the bookshelf route ASSERTS wall-adjacency directly rather than
+    trusting Qwen. This only ENABLES the geometric compute_wall_skip,
+    which itself no-ops when the unit is freestanding (>2.5m from every
+    wall) — so asserting it unconditionally for shelving is SAFE: a
+    wall-flush bookshelf gets front-arc (the v32 result), a genuinely
+    freestanding shelf keeps all cameras.
+
+    *** DO NOT REMOVE in a future chain rework. *** This is the single
+    line that reproduces the v32 front-arc bookshelf. It is written
+    BEFORE the SAM chain so sam_tight / sam_low_refine / sam_high_refine
+    (all the inside_outside mask producers) read it via
+    get_wall_skip_callable. No RANSAC involved.
+    """
+    p = obj_dir / "wall_adjacent.json"
+    p.write_text(json.dumps({
+        "wall_adjacent": True,
+        "reason": "bookshelf route — shelving is categorically wall-adjacent "
+                  "(front-arc imaging; back faces the wall)",
+        "forced_by": "procedure_dispatch.run_bookshelf",
+        "wide_pad_per_side": 0.1,
+    }, indent=2))
+    print("  [wall-adjacent] asserted wall_adjacent=true for bookshelf route — "
+          "front-arc imaging (compute_wall_skip self-no-ops if freestanding)")
+
+
 def run_bookshelf(scene: Path, obj_dir: Path) -> dict:
     """Shelving / bookshelf / cabinet: EXACTLY the general chain minus
     floor_drop (no RANSAC). inside_outside (rigid picker prompt, auto-selected
     by label) + the collapse-guard land the clean 0.60 — reproducing the
     verified-good v32 bookshelf + display-shelf result. Then split_children
-    for items-on-top (mirrors run_general; shelf contents stay in the unit)."""
+    for items-on-top (mirrors run_general; shelf contents stay in the unit).
+
+    FRONT-ARC: asserts wall-adjacency up front (a bookshelf is categorically
+    against a wall) so the SAM passes image only the open front, not the
+    wall-flush back — see _assert_wall_adjacent. Without this the full 360°
+    orbit doubles the mask count and inside_outside eats the bottom shelf."""
+    _assert_wall_adjacent(obj_dir)   # front-arc imaging — DO NOT REMOVE (v32 parity)
     status = _run_chain(scene, obj_dir, BOOKSHELF_PRE_QC_STAGES)
     status = _post_extract_qc(scene, obj_dir, status)
     # Split items sitting ON TOP of the shelf (plant, etc.) out to children;

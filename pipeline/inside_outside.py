@@ -130,6 +130,21 @@ def encode_b64(p, max_dim=1024):
     return base64.b64encode(buf.getvalue()).decode()
 
 
+# Rigid open-shelving / cabinet labels. These get (a) the shelving-worded picker
+# prompt and (b) a TIGHTER collapse-guard — the bottom shelf sits near the floor
+# and an over-aggressive threshold eats it, so we lean shelving LOWER (catch the
+# over-carve cliff sooner). Soft furniture keeps the looser guard.
+_RIGID_SHELVING_KW = (
+    "cabinet", "cupboard", "bookshelf", "bookcase", "book shelf",
+    "shelf", "shelves", "shelving", "etagere", "etagère", "étagère",
+    "sideboard", "credenza", "hutch")
+
+
+def is_rigid_shelving(label) -> bool:
+    lo = (label or "").lower()
+    return any(k in lo for k in _RIGID_SHELVING_KW)
+
+
 def qwen_pick(candidates, label, pipe_union=""):
     """candidates: list of dicts {thresh, frac_kept, renders:[y0,y180]}.
     pipe_union: the sam_prompt.txt pipe-union string (main + sub-items).
@@ -164,12 +179,7 @@ def qwen_pick(candidates, label, pipe_union=""):
     # aggressive bias over-carves soft upholstered bodies (armchair @ 0.75).
     # The mechanical collapse-guard in main() removes the body-collapsing rungs
     # for BOTH before this pick, so "prefer higher" can't run off the cliff.
-    lo = (label or "").lower()
-    is_rigid_shelving = any(k in lo for k in (
-        "cabinet", "cupboard", "bookshelf", "bookcase", "book shelf",
-        "shelf", "shelves", "shelving", "etagere", "etagère", "étagère",
-        "sideboard", "credenza", "hutch"))
-    if is_rigid_shelving:
+    if is_rigid_shelving(label):
         # OLD v32 prompt — validated on the v32 bookshelf + display shelf
         # (both picked 0.60 cleanly).
         instruction = (
@@ -416,8 +426,19 @@ def main():
         pipe_union = (sam_prompt_path.read_text().strip()
                        if sam_prompt_path.exists() else "")
 
-        print(f"[auto] threshold sweep: {SWEEP_3}")
-        cands = evaluate(SWEEP_3, "sweep")
+        # Rigid shelving caps the sweep at 0.60 — the v32 range. 478a866
+        # expanded SWEEP_3 with 0.75/0.85 "because a bookshelf wanted higher
+        # than 0.60", but with front-arc imaging (back-of-shelf masks skipped)
+        # 0.60 already keeps the whole unit (~92% — the v32 bar, bottom shelf
+        # solid) and 0.75 is a CLIFF (drops ~20%, eats the bottom shelf). The
+        # prefer-higher picker would grab 0.75 if offered, so don't offer it:
+        # capping at 0.60 reproduces v32 exactly and honours "lean lower on
+        # bookshelves". Soft furniture keeps the full ladder (the collapse-guard
+        # handles its 0.75 body-collapse). DO NOT remove with the front-arc fix.
+        sweep = [t for t in SWEEP_3 if t <= 0.60] if is_rigid_shelving(label) else SWEEP_3
+        print(f"[auto] threshold sweep: {sweep}"
+              f"{' (rigid shelving — capped at 0.60, v32 range)' if is_rigid_shelving(label) else ''}")
+        cands = evaluate(sweep, "sweep")
         # Collapse-guard (2026-05-29): a threshold whose kept-fraction falls
         # off a CLIFF vs the previous (lower) threshold has carved away the
         # object BODY, not just the floor halo — never offer it to the picker.
@@ -428,6 +449,15 @@ def main():
         # carve step drops only a few %; a structural collapse drops tens of %.
         # Rigid objects (bookshelf) don't collapse at 0.75 (~5% drop) so they
         # keep the high rungs.
+        #
+        # NOTE 2026-05-29: an earlier band-aid made this 0.15 for shelving to
+        # force-pick 0.45 — that was compensating for the bottom-shelf
+        # over-carve which is ACTUALLY caused by the bookshelf doing a full
+        # 360 orbit (back-of-shelf masks drag the bottom shelf below the
+        # cutoff). That is now root-fixed at the source: the bookshelf route
+        # asserts wall-adjacency -> front-arc imaging -> ~26 gentle masks ->
+        # 0.60 keeps ~96% (the v32 result). So the guard is back to the uniform
+        # 0.22 and the picker lands the clean 0.60 on its own.
         COLLAPSE_DROP = 0.22   # relative kept-fraction drop signalling collapse
         kept_cands = [cands[0]]
         for prev, cur in zip(cands, cands[1:]):
