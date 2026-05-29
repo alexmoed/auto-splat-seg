@@ -135,14 +135,18 @@ def qwen_pick(candidates, label, pipe_union=""):
     pipe_union: the sam_prompt.txt pipe-union string (main + sub-items).
     Returns the index Qwen picks.
 
-    Prompt is CLASS-SPECIFIC (2026-05-29):
-      - RIGID storage (cabinet / bookshelf / shelving) → the OLD v32 prompt
-        ("disqualify eroded, then PREFER the HIGHER strength"), which landed
-        the clean 0.60 on the v32 bookshelf + display shelf.
-      - SOFT / other furniture → conservative completeness-first prompt (the
-        aggressive bias over-carved soft bodies — armchair @ 0.75).
+    Prompt is CLASS-SPECIFIC wording, but BOTH variants are "prefer-higher"
+    (2026-05-29):
+      - RIGID storage (cabinet / bookshelf / shelving) → prefer-higher worded
+        for shelving (frame / shelves / shelf items). Landed the clean 0.60 on
+        the v32 bookshelf + display shelf.
+      - SOFT / other furniture (armchair, sofa) → the ORIGINAL generic
+        prefer-higher prompt (pillows / throws / legs) — the exact prompt the
+        verified-good armchair run used. NOT the shelving-worded one.
     The mechanical collapse-guard in main() removes the body-collapsing rungs
-    for BOTH before this pick, so 'prefer higher' can't run off the cliff."""
+    BEFORE this pick, so 'prefer higher' lands the clean 0.60 for both and
+    can't run off the cliff (it was the missing guard, not the wording, that
+    let the armchair over-carve at 0.75)."""
     content = []
     for i, c in enumerate(candidates):
         content.append({"type": "text",
@@ -194,32 +198,39 @@ def qwen_pick(candidates, label, pipe_union=""):
             f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
             f"No other text.")
     else:
-        # Conservative completeness-first prompt for soft / other furniture.
+        # SOFT / other furniture (armchair, sofa, ...) — the ORIGINAL generic
+        # "prefer-higher" prompt; this is the prompt the verified-good armchair
+        # run used (NOT the shelving-worded rigid one). The collapse-guard in
+        # main() already removes the body-collapsing rungs, so "prefer higher"
+        # lands the clean 0.60 without over-carving the soft body.
         instruction = (
             f"Each numbered candidate shows the SAME extracted '{label}', "
-            f"cleaned at an increasing strength (higher strength removes more "
-            f"surrounding contamination but eventually starts eating the "
-            f"object itself). The pipe-union the upstream SAM step used was:"
-            f"\n\n  {pipe_union}\n\n"
-            f"The MAIN object is '{label}'. The SUB-ITEMS listed above "
-            f"(pillows, throws, blankets, lamps, decor, hardware, etc.) are "
-            f"also part of this extraction and must be preserved.\n\n"
-            f"RULE #1 — NEVER CHOOSE A CANDIDATE THAT DESTROYS THE OBJECT. The "
-            f"complete '{label}' must be present and SOLID: its body / seat / "
-            f"back / arms / frame and every sub-item must be fully there — not "
-            f"hollowed out, fragmented, reduced to a thin shell, or partly "
-            f"missing. A candidate that looks 'cleaner' but is missing the "
-            f"body or large chunks of the object is DESTROYED and is "
-            f"DISQUALIFIED no matter how little floor/halo it has.\n\n"
-            f"RULE #2 — Among ONLY the candidates where the object and all "
-            f"sub-items are FULLY INTACT and solid, pick the one that removes "
-            f"the most contamination (floor halo / smear under the object / "
-            f"wisps / neighbouring furniture / walls / capture noise). Slight "
-            f"thinning of legs/feet is acceptable; a missing, broken, or "
-            f"floating-with-a-gap leg is not.\n\n"
-            f"RULE #3 — Prefer the HIGHEST strength at which the object is "
-            f"STILL COMPLETELY INTACT (removes the most halo). Step down only "
-            f"if the higher one loses ANY of the object's body or sub-items.\n\n"
+            f"cleaned at an increasing strength. The pipe-union the upstream "
+            f"SAM step used was:\n\n  {pipe_union}\n\n"
+            f"The MAIN object is '{label}'. The SUB-ITEMS listed in the "
+            f"pipe-union above (pillows, throws, blankets, lamps on top, decor, "
+            f"hardware, etc.) are also part of this extraction and must be "
+            f"preserved.\n\n"
+            f"Anything else in the renders — floor halo / smear under the "
+            f"object, wisps, neighboring furniture, walls, capture noise — is "
+            f"contamination this step is trying to remove. Higher strength "
+            f"removes more contamination but eventually starts eroding the "
+            f"object or its sub-items.\n\n"
+            f"**DISQUALIFY** any candidate where:\n"
+            f"- The body of the '{label}' is eroded, broken, or has chunks "
+            f"missing\n"
+            f"- Any sub-item from the pipe-union (pillows, throws, lamps, "
+            f"decor, hardware) is gone, eroded, or thinned\n\n"
+            f"Supports / legs / feet are preferred intact, but **slight "
+            f"thinning or shortening of supports is ACCEPTABLE** if the "
+            f"candidate removes substantially more contamination. Do not "
+            f"disqualify just because a leg looks a bit thinner — only if a leg "
+            f"is completely missing, broken, or floating with a gap.\n\n"
+            f"Among candidates that pass the disqualification rules, **PREFER "
+            f"THE HIGHER-STRENGTH (more aggressive) CANDIDATE** as long as the "
+            f"main object and sub-items are clearly intact. Only fall back to a "
+            f"lower strength if the higher one shows clear body or sub-item "
+            f"damage.\n\n"
             f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
             f"No other text.")
     content.append({"type": "text", "text": instruction})
