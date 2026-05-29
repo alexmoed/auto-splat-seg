@@ -135,10 +135,13 @@ def qwen_pick(candidates, label, pipe_union=""):
     pipe_union: the sam_prompt.txt pipe-union string (main + sub-items).
     Returns the index Qwen picks.
 
-    Prompt (locked 2026-05-20): preserve main + every sub-item in the
-    pipe-union; lenient on supports (slight thinning OK); prefer HIGHER
-    strength when safe. Validated on sofa — Qwen picked 0.60 from the
-    sweep with this wording."""
+    Prompt (rewritten 2026-05-29): COMPLETENESS FIRST — never pick a
+    candidate that destroys/hollows the object body or drops a sub-item, no
+    matter how clean it looks; among fully-intact candidates prefer the one
+    that removes the most floor/halo; when close, prefer the safer (lower)
+    strength. The old wording biased toward HIGHER strength, which let Qwen
+    pick a body-collapsing threshold (armchair 0.75 → 50% kept). Paired with
+    the mechanical collapse-guard in main() as defence-in-depth."""
     content = []
     for i, c in enumerate(candidates):
         content.append({"type": "text",
@@ -150,33 +153,32 @@ def qwen_pick(candidates, label, pipe_union=""):
                 "url": f"data:image/png;base64,{encode_b64(rp)}"}})
     content.append({"type": "text", "text":
         f"Each numbered candidate shows the SAME extracted '{label}', "
-        f"cleaned at an increasing strength. The pipe-union the upstream "
-        f"SAM step used was:\n\n"
+        f"cleaned at an increasing strength (higher strength removes more "
+        f"surrounding contamination but eventually starts eating the object "
+        f"itself). The pipe-union the upstream SAM step used was:\n\n"
         f"  {pipe_union}\n\n"
-        f"The MAIN object is '{label}'. The SUB-ITEMS listed in the "
-        f"pipe-union above (pillows, throws, blankets, lamps on top, "
-        f"decor, hardware, etc.) are also part of this extraction and "
-        f"must be preserved.\n\n"
-        f"Anything else in the renders — floor halo / smear under the "
-        f"object, wisps, neighboring furniture, walls, capture noise — "
-        f"is contamination this step is trying to remove. Higher "
-        f"strength removes more contamination but eventually starts "
-        f"eroding the object or its sub-items.\n\n"
-        f"**DISQUALIFY** any candidate where:\n"
-        f"- The body of the '{label}' is eroded, broken, or has chunks "
-        f"missing\n"
-        f"- Any sub-item from the pipe-union (pillows, throws, lamps, "
-        f"decor, hardware) is gone, eroded, or thinned\n\n"
-        f"Supports / legs / feet are preferred intact, but **slight "
-        f"thinning or shortening of supports is ACCEPTABLE** if the "
-        f"candidate removes substantially more contamination. Do not "
-        f"disqualify just because a leg looks a bit thinner — only if a "
-        f"leg is completely missing, broken, or floating with a gap.\n\n"
-        f"Among candidates that pass the disqualification rules, "
-        f"**PREFER THE HIGHER-STRENGTH (more aggressive) CANDIDATE** as "
-        f"long as the main object and sub-items are clearly intact. "
-        f"Only fall back to a lower strength if the higher one shows "
-        f"clear body or sub-item damage.\n\n"
+        f"The MAIN object is '{label}'. The SUB-ITEMS listed above "
+        f"(pillows, throws, blankets, lamps, decor, hardware, etc.) are also "
+        f"part of this extraction and must be preserved.\n\n"
+        f"RULE #1 — NEVER CHOOSE A CANDIDATE THAT DESTROYS THE OBJECT. The "
+        f"complete '{label}' must be present and SOLID: its body / seat / "
+        f"back / arms / frame and every sub-item must be fully there — not "
+        f"hollowed out, fragmented, reduced to a thin shell, or partly "
+        f"missing. A candidate that looks 'cleaner' but is missing the body "
+        f"or large chunks of the object is DESTROYED and is DISQUALIFIED no "
+        f"matter how little floor/halo it has. If you can no longer clearly "
+        f"see the whole object in a candidate, that candidate is wrong — "
+        f"never pick it.\n\n"
+        f"RULE #2 — Among ONLY the candidates where the object and all "
+        f"sub-items are FULLY INTACT and solid, pick the one that removes "
+        f"the most contamination (floor halo / smear under the object / "
+        f"wisps / neighbouring furniture / walls / capture noise). Slight "
+        f"thinning of legs/feet is acceptable; a missing, broken, or "
+        f"floating-with-a-gap leg is not.\n\n"
+        f"RULE #3 — When two intact candidates look close, PREFER THE SAFER "
+        f"(LOWER-STRENGTH) one. Do NOT reach for a higher strength if it "
+        f"costs any of the object's body or sub-items. Completeness always "
+        f"beats aggressiveness.\n\n"
         f"Reply with ONLY the candidate number (1 to "
         f"{len(candidates)}). No other text."})
 
