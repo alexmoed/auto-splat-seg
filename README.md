@@ -34,12 +34,6 @@ Per-object side-by-sides + camera specs:
 [wooden_sideboard](docs/showcase/wipe/wooden_sideboard_pair.png) ·
 [cameras.json](docs/showcase/wipe/cameras.json).
 
-The latest scene set (v27, May 2026) lives in
-[docs/showcase/wipe/v27/](docs/showcase/wipe/v27/) with cameras locked
-per object.
-
-Regenerate the grid with `python pipeline/build_showcase.py`.
-
 ## How it works
 
 1. **Foundation alignment** — rotate scan so floor is y-down and walls
