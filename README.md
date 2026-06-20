@@ -237,7 +237,6 @@ QWEN_URL=http://127.0.0.1:8002/v1 SAM_URL=http://127.0.0.1:9002 \
 wait
 ```
 
-3 scenes finish in the time one takes (~2h 44min on a 48 GB GPU).
 
 **Within-scene parallelism** (multiple object extractions hitting one
 vLLM concurrently) is *not* enabled yet — `procedure_dispatch.py` runs
