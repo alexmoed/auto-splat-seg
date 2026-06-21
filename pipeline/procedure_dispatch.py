@@ -28,10 +28,13 @@ Usage:
     python procedure_dispatch.py <scene_dir> <obj_dir> --procedure general
 """
 import argparse
+import base64
 import json
+import os
 import re
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 ITERATION_DIR = Path(__file__).resolve().parent
@@ -89,38 +92,10 @@ STAGE_SAM_TIGHT_FROM_FLOOR = (
                   str(s), str(o)],
     "4_sam_tight.ply",
 )
-# Bookshelf-specific sam_tight: looser vote (0.5 vs 0.7) + bigger pads
-# (hard 0.05/fabric 0.15) — defaults nuke the body of a bookshelf because
-# only the front-facing yaws have valid SAM masks. Validated 2026-05-05
-# on 02_bookshelf.
-STAGE_SAM_TIGHT_BOOKSHELF = (
-    "sam_tight",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "sam_tight.py"),
-                  str(s), str(o),
-                  "--min-views-frac", "0.5",
-                  "--sam-pad-hard-m", "0.05",
-                  "--sam-pad-fabric-m", "0.15"],
-    "4_sam_tight.ply",
-)
-STAGE_BOOKSHELF_SWEEP = (
-    "bookshelf_sweep",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "bookshelf_sweep.py"),
-                  str(s), str(o)],
-    "5_bookshelf_sweep.ply",
-)
-# Second bookshelf_sweep pass at low pitches (sees up under the shelves
-# / catches the bottom plinth and base). Same Qwen-bbox-vote mechanism
-# as the main pass — just different camera elevations. Output PLY lives
-# alongside 5_bookshelf_sweep.ply so stage_pick can compare both.
-STAGE_BOOKSHELF_SWEEP_LOW = (
-    "bookshelf_sweep_low",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "bookshelf_sweep.py"),
-                  str(s), str(o),
-                  "--pitches", "0,15",
-                  "--out-name", "5b_bookshelf_sweep_low",
-                  "--src-ply", "4_sam_tight.ply"],
-    "5b_bookshelf_sweep_low.ply",
-)
+# (Retired 2026-05-29: STAGE_SAM_TIGHT_BOOKSHELF + STAGE_BOOKSHELF_SWEEP[_LOW].
+# The bookshelf/shelving chain now reuses the general stages minus floor_drop
+# — see BOOKSHELF_PRE_QC_STAGES + run_bookshelf below. bookshelf_sweep.py
+# skipped inside_outside and left a green haze; bookshelf_sweep.py is deleted.)
 # sam_low_refine — generates the low-camera SAM masks that inside_outside
 # pools with the 4_sam_tight (high) masks for the multi-mask insideness
 # carve. NOT a standalone carve — its 4b_sam_tight_low.ply output is
@@ -180,35 +155,13 @@ STAGE_FINAL_PICK = (
                   str(o)],
     "8_final.ply",
 )
-# Drop big+dark Gaussian splat streaks (one axis blew up, color collapsed
-# ~black). Locked 2026-05-27 after light_wood_bookshelf had visible black
-# vertical smears in the front view. Rewrites 7_final.ply in place when
-# it finds streaks; no-op otherwise. Optional — no streaks ≠ failure.
-STAGE_DESTREAK = (
-    "splat_destreak",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "splat_destreak.py"),
-                  str(o)],
-    "diagnostics/8_destreak/report.json",
-    True,  # optional — no streaks means no report, that's fine
-)
-STAGE_INFO = (
-    "info",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "info.py"),
-                  str(s), str(o)],
-    "info.json",
-)
-# Final QC: lenient Qwen check on the latest stage's 5 canonical
-# renders. PASS = keep. REJECT (heavily damaged / unrecognizable noise)
-# = move whole folder to <scene>/rejects/. Marker is qc_reject.json,
-# which the script always writes — re-running on a kept object is a
-# no-op via the marker check. (Rejected folders move out, so they
-# can't be re-checked here.)
-STAGE_QC_REJECT = (
-    "qc_reject",
-    lambda s, o: [sys.executable, str(ITERATION_DIR / "qc_reject.py"),
-                  str(s), str(o)],
-    "qc_reject.json",
-)
+# (Retired 2026-05-29: standalone STAGE_DESTREAK. stage_pick already runs
+# `splat_destreak --auto` internally (7_picked -> 7_destreak -> 8_final), so
+# the standalone stage was a redundant re-run with a never-matching marker.
+# splat_destreak.py itself stays — stage_pick uses it.)
+# (Retired 2026-05-29: STAGE_INFO + STAGE_QC_REJECT stage tuples were dead —
+# info + qc_reject run via _run_info / _run_qc / _post_extract_qc directly, not
+# as _run_chain stages. Removed.)
 
 
 def _run_chain(scene: Path, obj_dir: Path, stages: list) -> dict:
@@ -232,7 +185,12 @@ def _run_chain(scene: Path, obj_dir: Path, stages: list) -> dict:
         print(f"  [{name}] running...")
         r = subprocess.run(mkcmd(scene, obj_dir))
         if r.returncode != 0:
-            status[name] = f"fail({r.returncode})"
+            # Optional-stage failures get a NON-'fail' status so the dispatch
+            # exit gate (sys.exit(2) trips on any 'fail(...)') doesn't report a
+            # fully-extracted, QA-passed object as failed just because a
+            # tolerated optional refine pass (sam_low/high_refine) hiccuped.
+            status[name] = (f"optional_fail({r.returncode})" if optional
+                            else f"fail({r.returncode})")
             print(f"  [{name}] FAIL exit={r.returncode}"
                   f"{' (optional, continuing)' if optional else ''}")
             if not optional:
@@ -453,11 +411,48 @@ def _post_extract_qc(scene: Path, obj_dir: Path, status: dict,
     return status
 
 
+def _read_meta_label(obj_dir: Path) -> str:
+    """Best-effort read of the object's free-text label from its hull meta."""
+    mp = obj_dir / "1_visual_hull_meta.json"
+    if mp.exists():
+        try:
+            return json.load(open(mp)).get("label", "") or ""
+        except Exception:
+            pass
+    return ""
+
+
+# Storage furniture that is CATEGORICALLY wall-flush (its back face sits
+# against the wall and isn't worth imaging) and routes to the GENERAL chain
+# (keeps RANSAC). These get the SAME front-arc assertion as the bookshelf
+# route — otherwise a misfired per-object wall-adjacency check silently falls
+# back to a full 360 orbit and over-carves the base (the exact regression the
+# bookshelf route was fixed for, 2026-05-29). _assert_wall_adjacent only
+# ENABLES the geometric compute_wall_skip, which self-no-ops for a genuinely
+# freestanding unit (>2.5m from every wall), so asserting is safe. Chairs /
+# sofas are deliberately NOT here — their backs are real geometry we want.
+_WALL_FLUSH_STORAGE_KW = (
+    "cabinet", "cupboard", "sideboard", "credenza", "hutch", "buffet",
+    "dresser", "wardrobe", "armoire", "chest of drawers", "console")
+
+
+def is_wall_flush_storage(label) -> bool:
+    lo = (label or "").lower()
+    return any(k in lo for k in _WALL_FLUSH_STORAGE_KW)
+
+
 def run_general(scene: Path, obj_dir: Path) -> dict:
     """sam_carve → floor_drop → sam_tight → [bbox-sweep fallback if
     needed] → info → qc_reject (with fallback retry) → reject if both
     QC passes fail. Then split_children to break items-on-top out of
-    the parent (sideboard → lamp, picture frame, vases, etc.)."""
+    the parent (sideboard → lamp, picture frame, vases, etc.).
+
+    Wall-flush storage furniture (cabinet/sideboard/credenza/...) asserts
+    front-arc imaging up front, same as the bookshelf route — see
+    _assert_wall_adjacent / is_wall_flush_storage. (Cabinets keep RANSAC,
+    which is the general chain; they ALSO get front-arc.)"""
+    if is_wall_flush_storage(_read_meta_label(obj_dir)):
+        _assert_wall_adjacent(obj_dir)   # front-arc for wall-flush storage — DO NOT REMOVE
     status = _run_chain(scene, obj_dir, GENERAL_PRE_QC_STAGES)
     status = _post_extract_qc(scene, obj_dir, status)
     # If the object survived QC (still on disk), split items-on-top.
@@ -505,35 +500,98 @@ def run_tv(scene: Path, obj_dir: Path) -> dict:
     return status
 
 
+# Shelving / bookshelf / cabinet chain (locked 2026-05-29). This is EXACTLY
+# the general chain MINUS floor_drop (RANSAC) — reproducing the verified-good
+# v32 display-shelf + bookshelf result (general + no-RANSAC + inside_outside
+# @ 0.60). RANSAC is the only difference vs general, and it is wrong for rigid
+# shelving (the floor-band drop buys nothing here and risks the bottom plinth).
+# inside_outside is the cleaner that removes the back/floor haze; its picker
+# uses the rigid "prefer-higher" prompt (auto-selected by label) which lands
+# the clean 0.60, while the collapse-guard blocks the body-collapsing rungs.
+# sam_low_refine reads 4_sam_tight directly (4a_floor_drop is absent). The old
+# bookshelf_sweep path skipped inside_outside and left a green haze, so it is
+# retired.
 BOOKSHELF_PRE_QC_STAGES = [
     STAGE_SAM_CARVE_S1, STAGE_SAM_CARVE_S2,
     STAGE_SAM_CARVE_S3, STAGE_SAM_CARVE_S4,
-    # STAGE_FLOOR_DROP RETIRED 2026-05-27 — same reason as general chain.
-    STAGE_SAM_TIGHT_BOOKSHELF,
-    STAGE_BOOKSHELF_SWEEP,
-    STAGE_BOOKSHELF_SWEEP_LOW,  # 2026-05-22 — second pass at low pitches
-                                 # (same Qwen-bbox-vote mechanism as
-                                 # bookshelf_sweep, just from below).
-    STAGE_FINAL_PICK,       # picks best from available stage outputs.
-    STAGE_DESTREAK,         # drop big+dark streak splats from 7_final.ply (2026-05-27)
+    STAGE_SAM_TIGHT_FROM_FLOOR,    # Pass A center, sources 2_sam_wide.ply
+    # NO floor_drop / RANSAC for shelving.
+    STAGE_SAM_LOW_REFINE,          # Pass B low — reads 4_sam_tight (4a absent)
+    STAGE_SAM_HIGH_REFINE,         # Pass C steep
+    STAGE_SWEEP_FALLBACK,          # Qwen-bbox vote refinement on 4_sam_tight
+    STAGE_INSIDE_OUTSIDE,          # multi-mask carve; rigid picker prompt → 0.60
+    STAGE_FINAL_PICK,              # 7_picked → destreak --auto → 8_final
 ]
 
 
+def _assert_wall_adjacent(obj_dir: Path) -> None:
+    """Bake the front-arc imaging assumption into the bookshelf ROUTE.
+
+    A bookshelf / shelving unit is CATEGORICALLY against a wall, so its
+    back-hemisphere views see only wall and MUST be skipped (front-arc
+    imaging — image the open front, not the wall-flush back). v32 got
+    this right ONLY because the per-object Qwen wall-adjacency check
+    happened to write wall_adjacent:true. That check can fail silently
+    (empty / false wall_adjacent.json) — when it does, sam_tight images
+    the full 360° orbit, which roughly DOUBLES the SAM mask count
+    (v32: 26 masks → current misfire: 58), and the extra back/wall-side
+    masks drag the bottom-shelf splats below the inside_outside cutoff →
+    the bottom shelf gets eaten. (This is the "why do we keep
+    re-deriving the same lesson" regression: a deliberate design
+    decision was encoded only in a flaky runtime guess + memory notes,
+    so every chain rework re-rolls the dice.)
+
+    So the bookshelf route ASSERTS wall-adjacency directly rather than
+    trusting Qwen. This only ENABLES the geometric compute_wall_skip,
+    which itself no-ops when the unit is freestanding (>2.5m from every
+    wall) — so asserting it unconditionally for shelving is SAFE: a
+    wall-flush bookshelf gets front-arc (the v32 result), a genuinely
+    freestanding shelf keeps all cameras.
+
+    *** DO NOT REMOVE in a future chain rework. *** This is the single
+    line that reproduces the v32 front-arc bookshelf. It is written
+    BEFORE the SAM chain so sam_tight / sam_low_refine / sam_high_refine
+    (all the inside_outside mask producers) read it via
+    get_wall_skip_callable. No RANSAC involved.
+    """
+    p = obj_dir / "wall_adjacent.json"
+    p.write_text(json.dumps({
+        "wall_adjacent": True,
+        "reason": "bookshelf route — shelving is categorically wall-adjacent "
+                  "(front-arc imaging; back faces the wall)",
+        "forced_by": "procedure_dispatch.run_bookshelf",
+        "wide_pad_per_side": 0.1,
+    }, indent=2))
+    print("  [wall-adjacent] asserted wall_adjacent=true for bookshelf route — "
+          "front-arc imaging (compute_wall_skip self-no-ops if freestanding)")
+
+
 def run_bookshelf(scene: Path, obj_dir: Path) -> dict:
-    """Bookshelf chain (validated 2026-05-05 on 02_bookshelf):
-    sam_carve → floor_drop → sam_tight (looser: 0.5/0.05/0.15) →
-    bookshelf_sweep → info → qc_reject with bbox-sweep fallback retry.
-    Then companion_search to extract individual shelf items (books, vases,
-    picture frames, baskets, plants, etc.) as separate children."""
+    """Shelving / bookshelf / cabinet: EXACTLY the general chain minus
+    floor_drop (no RANSAC). inside_outside (rigid picker prompt, auto-selected
+    by label) + the collapse-guard land the clean 0.60 — reproducing the
+    verified-good v32 bookshelf + display-shelf result. Then split_children
+    for items-on-top (mirrors run_general; shelf contents stay in the unit).
+
+    FRONT-ARC: asserts wall-adjacency up front (a bookshelf is categorically
+    against a wall) so the SAM passes image only the open front, not the
+    wall-flush back — see _assert_wall_adjacent. Without this the full 360°
+    orbit doubles the mask count and inside_outside eats the bottom shelf."""
+    _assert_wall_adjacent(obj_dir)   # front-arc imaging — DO NOT REMOVE (v32 parity)
     status = _run_chain(scene, obj_dir, BOOKSHELF_PRE_QC_STAGES)
     status = _post_extract_qc(scene, obj_dir, status)
-    if (obj_dir / "companions.json").exists():
-        status["companion_search"] = "skip"
-    else:
-        rc = subprocess.run([sys.executable,
-                              str(ITERATION_DIR / "companion_search.py"),
-                              str(scene), str(obj_dir)]).returncode
-        status["companion_search"] = "ok" if rc == 0 else f"fail({rc})"
+    # Split items sitting ON TOP of the shelf (plant, etc.) out to children;
+    # the books/vases/decor between shelves stay in the unit (as in the
+    # verified-good result).
+    if obj_dir.exists() and (obj_dir / "diagnostics" / "2_sam_wide" /
+                              "sam_prompt.txt").exists():
+        if (obj_dir / "children" / "manifest.json").exists():
+            status["split_children"] = "skip"
+        else:
+            rc = subprocess.run([sys.executable,
+                                  str(ITERATION_DIR / "split_children.py"),
+                                  str(scene), str(obj_dir)]).returncode
+            status["split_children"] = "ok" if rc == 0 else f"fail({rc})"
     return status
 
 
@@ -647,8 +705,13 @@ TV_PATTERN        = re.compile(
     r"\b(tv|television|monitor|screen|flat[- ]?screen)\b", re.IGNORECASE)
 TV_EXCLUDE        = re.compile(r"\b(stand|console|cabinet|unit|table)\b",
                                re.IGNORECASE)
+# Bookshelf / bookcase / any shelving unit (incl. "display shelf", "wall shelf",
+# "wooden shelf") — all tall open shelving that wants the no-RANSAC bookshelf
+# procedure. The bare \bshelf\b / \bshelves\b alts catch "wooden display shelf"
+# etc.; a wall-mounted "floating shelf" also routes here (no floor_drop, fine).
 BOOKSHELF_PATTERN = re.compile(
-    r"\b(bookshelf|book[- ]?shelf|bookcase|shelving(?:\s+unit)?|open\s+shelving)\b",
+    r"\b(bookshelf|book[- ]?shelf|bookcase|shelving(?:\s+unit)?|open\s+shelving"
+    r"|etagere|etag[eè]re|étag[eè]re|shelf|shelves)\b",
     re.IGNORECASE)
 RUG_PATTERN = re.compile(
     r"\b(rug|carpet|area\s+rug|floor\s+mat|runner)\b", re.IGNORECASE)
@@ -683,17 +746,88 @@ def decide_procedure(label: str) -> str:
     # LAMP_PATTERN (no floor/standing) and stay on their existing route.
     if LAMP_PATTERN.search(lo):
         return "lamp"
-    # Bookshelf route RETIRED from auto-routing 2026-05-22 — the general
-    # route extracts bookshelves at least as cleanly (validated on the
-    # light-wood + tall metal-frame bookshelves) and keeps the pipeline
-    # simpler. The bookshelf procedure is still defined and reachable via
-    # an explicit `--procedure bookshelf` (kept for website renders).
-    # BOOKSHELF_PATTERN is left in place for that manual path.
+    # Bookshelf / shelving — route to the dedicated bookshelf procedure.
+    # 2026-05-29: the bookshelf procedure is EXACTLY the general chain MINUS
+    # floor_drop/RANSAC (sam_carve -> sam_tight -> sam_low/high refine ->
+    # sweep_fallback -> inside_outside [rigid picker prompt] -> stage_pick).
+    # RANSAC is the only difference vs general and is wrong for a tall shelving
+    # profile. (Cabinets stay on the general route WITH RANSAC, but still get
+    # the rigid inside_outside prompt by label.) BOOKSHELF_PATTERN matches
+    # bookshelf / bookcase / shelving /
+    # shelving unit / open shelving.
+    if BOOKSHELF_PATTERN.search(lo):
+        return "bookshelf"
     if RUG_PATTERN.search(lo):
         return "rug"
     if TABLE_PATTERN.search(lo) and not TABLE_EXCLUDE.search(lo):
         return "table"
     return "general"
+
+
+# ───── route double-check (Qwen) ────────────────────────────────────────
+
+# The one label confusion that flips RANSAC on/off is cabinet <-> open
+# shelving (shelving = no-RANSAC bookshelf route; cabinet = general+RANSAC).
+# Detection occasionally mislabels an open shelving unit as a "cabinet" (or
+# vice-versa). This regex gates the (cheap) Qwen sanity check to ONLY those
+# ambiguous storage labels — everything else trusts the rule.
+_STORAGE_AMBIGUOUS = re.compile(
+    r"\b(cabinet|cupboard|sideboard|console|credenza|hutch|bookshelf|bookcase|"
+    r"book[- ]?shelf|shelf|shelves|shelving|etagere|etag[eè]re|étag[eè]re)\b",
+    re.IGNORECASE)
+
+
+def route_double_check(obj_dir: Path, label: str, decided: str) -> str:
+    """Light Qwen sanity check on the cabinet<->open-shelving routing ambiguity
+    (the only label confusion that flips RANSAC). Fires ONLY for storage labels.
+    Looks at the coarse-hull renders and asks open-shelving vs closed-cabinet;
+    re-routes if the rule got it wrong. FAIL-SAFE: returns `decided` unchanged on
+    any error / unsure / missing render — never breaks the route. (Rare in
+    practice, so the extra Qwen call only happens for storage-class labels.)"""
+    if not _STORAGE_AMBIGUOUS.search(label or ""):
+        return decided
+    imgs = [obj_dir / "renders" / "1_visual_hull" / v for v in ("y0.png", "y90.png")]
+    imgs = [p for p in imgs if p.exists()]
+    if not imgs:
+        return decided
+    try:
+        content = [{"type": "text", "text":
+            f"This object is currently labelled '{label}'. Looking at the "
+            f"renders: is it an OPEN SHELVING UNIT / bookshelf (open shelves "
+            f"with visible items, NO doors or drawers) or a CLOSED CABINET "
+            f"(doors and/or drawers, contents hidden)? Reply with ONE word only: "
+            f"open_shelving OR closed_cabinet OR unsure."}]
+        for p in imgs:
+            b64 = base64.b64encode(p.read_bytes()).decode()
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64}"}})
+        payload = json.dumps({
+            "model": os.environ.get("QWEN_MODEL", "qwen36-awq"),
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 16, "temperature": 0.0,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }).encode()
+        url = os.environ.get("QWEN_URL", "http://127.0.0.1:8000/v1") + "/chat/completions"
+        req = urllib.request.Request(url, data=payload,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            ans = json.loads(r.read())["choices"][0]["message"]["content"].strip().lower()
+    except Exception as e:
+        print(f"  [route-check] skipped ({e}) — keeping rule-based '{decided}'")
+        return decided
+    if "open" in ans and "shelv" in ans:
+        if decided != "bookshelf":
+            print(f"  [route-check] '{label}' reads as OPEN SHELVING — "
+                  f"re-routing {decided} -> bookshelf (no RANSAC)")
+        return "bookshelf"
+    if "closed" in ans and "cabinet" in ans:
+        if decided == "bookshelf":
+            print(f"  [route-check] '{label}' reads as a CLOSED CABINET — "
+                  f"re-routing bookshelf -> general (RANSAC)")
+            return "general"
+        return decided
+    print(f"  [route-check] unsure ('{ans}') — keeping rule-based '{decided}'")
+    return decided
 
 
 # ───── main ────────────────────────────────────────────────────────────
@@ -723,6 +857,10 @@ def main():
             pass
 
     procedure = args.procedure or decide_procedure(label)
+    # Double-check the rule's pick on the cabinet<->open-shelving axis (the
+    # only ambiguity that flips RANSAC). Skipped when --procedure is forced.
+    if args.procedure is None:
+        procedure = route_double_check(obj, label, procedure)
     print(f"[dispatch] obj={obj.name}  label='{label}'  procedure={procedure}")
 
     fn = PROCEDURES[procedure]

@@ -50,7 +50,6 @@ MIN_MASK_PX = 2000
 # 0.60 with the new prompt. 0.30 is just above the prior fixed default
 # (0.25) — light end. 0.60 is the aggressive end. 0.45 is the middle.
 SWEEP_3 = [0.30, 0.45, 0.60, 0.75, 0.85]  # expanded 2026-05-27 — bookshelf wanted higher than 0.60; let Qwen pick across the full ladder including the high-strength end.
-THR_MIN, THR_MAX = 0.1, 0.7
 FOV, W, H = 70.0, 1920, 1080
 # Candidate sweep renders shown to Qwen are framed WIDE (object well
 # inside the frame with margin) so Qwen can actually see the legs/feet
@@ -59,16 +58,10 @@ QWEN_VIEW_MARGIN = 2.05
 QWEN_URL = "http://127.0.0.1:8000/v1"
 QWEN_MODEL = "qwen36-awq"
 
-# Bookshelves / open shelving are EXEMPT: their structure is too open
-# (shelves, gaps, items inside) for a silhouette inside/outside carve —
-# the test would wrongly cut interior contents and see-through gaps.
-SHELVING_KEYWORDS = ("bookshelf", "bookcase", "book shelf", "shelving",
-                     "shelf", "etagere", "etagère", "étagère")
-
-
-def is_shelving(label):
-    lo = (label or "").lower()
-    return any(k in lo for k in SHELVING_KEYWORDS)
+# (Retired 2026-05-29: the old is_shelving()/SHELVING_KEYWORDS exemption that
+# skipped the inside/outside carve for shelving is dead — shelving now runs the
+# carve like everything else, gated by the class-aware picker + capped sweep
+# (is_rigid_shelving). Removed to avoid a stale duplicate keyword set.)
 
 
 # ----------------------------------------------------------------------
@@ -130,15 +123,38 @@ def encode_b64(p, max_dim=1024):
     return base64.b64encode(buf.getvalue()).decode()
 
 
+# Rigid open-shelving / cabinet labels. These get (a) the shelving-worded picker
+# prompt and (b) a TIGHTER collapse-guard — the bottom shelf sits near the floor
+# and an over-aggressive threshold eats it, so we lean shelving LOWER (catch the
+# over-carve cliff sooner). Soft furniture keeps the looser guard.
+_RIGID_SHELVING_KW = (
+    "cabinet", "cupboard", "bookshelf", "bookcase", "book shelf",
+    "shelf", "shelves", "shelving", "etagere", "etagère", "étagère",
+    "sideboard", "credenza", "hutch")
+
+
+def is_rigid_shelving(label) -> bool:
+    lo = (label or "").lower()
+    return any(k in lo for k in _RIGID_SHELVING_KW)
+
+
 def qwen_pick(candidates, label, pipe_union=""):
     """candidates: list of dicts {thresh, frac_kept, renders:[y0,y180]}.
     pipe_union: the sam_prompt.txt pipe-union string (main + sub-items).
     Returns the index Qwen picks.
 
-    Prompt (locked 2026-05-20): preserve main + every sub-item in the
-    pipe-union; lenient on supports (slight thinning OK); prefer HIGHER
-    strength when safe. Validated on sofa — Qwen picked 0.60 from the
-    sweep with this wording."""
+    Prompt is CLASS-SPECIFIC wording, but BOTH variants are "prefer-higher"
+    (2026-05-29):
+      - RIGID storage (cabinet / bookshelf / shelving) → prefer-higher worded
+        for shelving (frame / shelves / shelf items). Landed the clean 0.60 on
+        the v32 bookshelf + display shelf.
+      - SOFT / other furniture (armchair, sofa) → the ORIGINAL generic
+        prefer-higher prompt (pillows / throws / legs) — the exact prompt the
+        verified-good armchair run used. NOT the shelving-worded one.
+    The mechanical collapse-guard in main() removes the body-collapsing rungs
+    BEFORE this pick, so 'prefer higher' lands the clean 0.60 for both and
+    can't run off the cliff (it was the missing guard, not the wording, that
+    let the armchair over-carve at 0.75)."""
     content = []
     for i, c in enumerate(candidates):
         content.append({"type": "text",
@@ -148,37 +164,79 @@ def qwen_pick(candidates, label, pipe_union=""):
         for rp in c["renders"]:
             content.append({"type": "image_url", "image_url": {
                 "url": f"data:image/png;base64,{encode_b64(rp)}"}})
-    content.append({"type": "text", "text":
-        f"Each numbered candidate shows the SAME extracted '{label}', "
-        f"cleaned at an increasing strength. The pipe-union the upstream "
-        f"SAM step used was:\n\n"
-        f"  {pipe_union}\n\n"
-        f"The MAIN object is '{label}'. The SUB-ITEMS listed in the "
-        f"pipe-union above (pillows, throws, blankets, lamps on top, "
-        f"decor, hardware, etc.) are also part of this extraction and "
-        f"must be preserved.\n\n"
-        f"Anything else in the renders — floor halo / smear under the "
-        f"object, wisps, neighboring furniture, walls, capture noise — "
-        f"is contamination this step is trying to remove. Higher "
-        f"strength removes more contamination but eventually starts "
-        f"eroding the object or its sub-items.\n\n"
-        f"**DISQUALIFY** any candidate where:\n"
-        f"- The body of the '{label}' is eroded, broken, or has chunks "
-        f"missing\n"
-        f"- Any sub-item from the pipe-union (pillows, throws, lamps, "
-        f"decor, hardware) is gone, eroded, or thinned\n\n"
-        f"Supports / legs / feet are preferred intact, but **slight "
-        f"thinning or shortening of supports is ACCEPTABLE** if the "
-        f"candidate removes substantially more contamination. Do not "
-        f"disqualify just because a leg looks a bit thinner — only if a "
-        f"leg is completely missing, broken, or floating with a gap.\n\n"
-        f"Among candidates that pass the disqualification rules, "
-        f"**PREFER THE HIGHER-STRENGTH (more aggressive) CANDIDATE** as "
-        f"long as the main object and sub-items are clearly intact. "
-        f"Only fall back to a lower strength if the higher one shows "
-        f"clear body or sub-item damage.\n\n"
-        f"Reply with ONLY the candidate number (1 to "
-        f"{len(candidates)}). No other text."})
+    # ── Class-specific picker prompt ──────────────────────────────────────
+    # RIGID storage (cabinets / bookshelves / shelving) has hard edges and
+    # delicate shelf clutter: the OLD v32 prompt ("disqualify eroded, then
+    # PREFER the HIGHER strength") reliably landed the clean 0.60 there. SOFT
+    # / other furniture keeps the conservative completeness-first prompt — the
+    # aggressive bias over-carves soft upholstered bodies (armchair @ 0.75).
+    # The mechanical collapse-guard in main() removes the body-collapsing rungs
+    # for BOTH before this pick, so "prefer higher" can't run off the cliff.
+    if is_rigid_shelving(label):
+        # OLD v32 prompt — validated on the v32 bookshelf + display shelf
+        # (both picked 0.60 cleanly).
+        instruction = (
+            f"Each numbered candidate shows the SAME extracted '{label}', "
+            f"cleaned at an increasing strength. The pipe-union the upstream "
+            f"SAM step used was:\n\n  {pipe_union}\n\n"
+            f"The MAIN object is '{label}'. The SUB-ITEMS listed above (books, "
+            f"vases, plants, baskets, decor, hardware, etc.) are also part of "
+            f"this extraction and must be preserved.\n\n"
+            f"Anything else in the renders — floor halo / smear under or "
+            f"behind the object, wisps, neighbouring furniture, walls, capture "
+            f"noise — is contamination this step is removing. Higher strength "
+            f"removes more contamination but eventually starts eroding the "
+            f"frame, shelves, or shelf items.\n\n"
+            f"**DISQUALIFY** any candidate where:\n"
+            f"- The frame / shelves / body of the '{label}' is eroded, broken, "
+            f"or has chunks missing\n"
+            f"- Any shelf item (book, vase, plant, decor, hardware) is gone, "
+            f"eroded, or thinned\n\n"
+            f"Among candidates that PASS the disqualification rules, **PREFER "
+            f"THE HIGHER-STRENGTH (more aggressive) CANDIDATE** — it removes "
+            f"the most floor/background haze — as long as the frame, shelves, "
+            f"and every shelf item are clearly intact. Only fall back to a "
+            f"lower strength if the higher one shows clear damage to the "
+            f"object or a shelf item.\n\n"
+            f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
+            f"No other text.")
+    else:
+        # SOFT / other furniture (armchair, sofa, ...) — the ORIGINAL generic
+        # "prefer-higher" prompt; this is the prompt the verified-good armchair
+        # run used (NOT the shelving-worded rigid one). The collapse-guard in
+        # main() already removes the body-collapsing rungs, so "prefer higher"
+        # lands the clean 0.60 without over-carving the soft body.
+        instruction = (
+            f"Each numbered candidate shows the SAME extracted '{label}', "
+            f"cleaned at an increasing strength. The pipe-union the upstream "
+            f"SAM step used was:\n\n  {pipe_union}\n\n"
+            f"The MAIN object is '{label}'. The SUB-ITEMS listed in the "
+            f"pipe-union above (pillows, throws, blankets, lamps on top, decor, "
+            f"hardware, etc.) are also part of this extraction and must be "
+            f"preserved.\n\n"
+            f"Anything else in the renders — floor halo / smear under the "
+            f"object, wisps, neighboring furniture, walls, capture noise — is "
+            f"contamination this step is trying to remove. Higher strength "
+            f"removes more contamination but eventually starts eroding the "
+            f"object or its sub-items.\n\n"
+            f"**DISQUALIFY** any candidate where:\n"
+            f"- The body of the '{label}' is eroded, broken, or has chunks "
+            f"missing\n"
+            f"- Any sub-item from the pipe-union (pillows, throws, lamps, "
+            f"decor, hardware) is gone, eroded, or thinned\n\n"
+            f"Supports / legs / feet are preferred intact, but **slight "
+            f"thinning or shortening of supports is ACCEPTABLE** if the "
+            f"candidate removes substantially more contamination. Do not "
+            f"disqualify just because a leg looks a bit thinner — only if a leg "
+            f"is completely missing, broken, or floating with a gap.\n\n"
+            f"Among candidates that pass the disqualification rules, **PREFER "
+            f"THE HIGHER-STRENGTH (more aggressive) CANDIDATE** as long as the "
+            f"main object and sub-items are clearly intact. Only fall back to a "
+            f"lower strength if the higher one shows clear body or sub-item "
+            f"damage.\n\n"
+            f"Reply with ONLY the candidate number (1 to {len(candidates)}). "
+            f"No other text.")
+    content.append({"type": "text", "text": instruction})
 
     payload = json.dumps({
         "model": QWEN_MODEL,
@@ -361,10 +419,54 @@ def main():
         pipe_union = (sam_prompt_path.read_text().strip()
                        if sam_prompt_path.exists() else "")
 
-        print(f"[auto] 3-threshold sweep: {SWEEP_3}")
-        cands = evaluate(SWEEP_3, "sweep")
-        ci = qwen_pick(cands, label, pipe_union=pipe_union)
-        thresh = cands[ci]["thresh"]
+        # Rigid shelving caps the sweep at 0.60 — the v32 range. 478a866
+        # expanded SWEEP_3 with 0.75/0.85 "because a bookshelf wanted higher
+        # than 0.60", but with front-arc imaging (back-of-shelf masks skipped)
+        # 0.60 already keeps the whole unit (~92% — the v32 bar, bottom shelf
+        # solid) and 0.75 is a CLIFF (drops ~20%, eats the bottom shelf). The
+        # prefer-higher picker would grab 0.75 if offered, so don't offer it:
+        # capping at 0.60 reproduces v32 exactly and honours "lean lower on
+        # bookshelves". Soft furniture keeps the full ladder (the collapse-guard
+        # handles its 0.75 body-collapse). DO NOT remove with the front-arc fix.
+        sweep = [t for t in SWEEP_3 if t <= 0.60] if is_rigid_shelving(label) else SWEEP_3
+        print(f"[auto] threshold sweep: {sweep}"
+              f"{' (rigid shelving — capped at 0.60, v32 range)' if is_rigid_shelving(label) else ''}")
+        cands = evaluate(sweep, "sweep")
+        # Collapse-guard (2026-05-29): a threshold whose kept-fraction falls
+        # off a CLIFF vs the previous (lower) threshold has carved away the
+        # object BODY, not just the floor halo — never offer it to the picker.
+        # Drop the first collapsing candidate and every stricter one.
+        # Regression context: 478a866 expanded SWEEP_3 with 0.75/0.85 for
+        # bookshelves; on the grey armchair 0.60 kept 89% (clean, = the v32
+        # bar) but 0.75 kept only 50% (body gone) and Qwen picked it. A clean
+        # carve step drops only a few %; a structural collapse drops tens of %.
+        # Rigid objects (bookshelf) don't collapse at 0.75 (~5% drop) so they
+        # keep the high rungs.
+        #
+        # NOTE 2026-05-29: an earlier band-aid made this 0.15 for shelving to
+        # force-pick 0.45 — that was compensating for the bottom-shelf
+        # over-carve which is ACTUALLY caused by the bookshelf doing a full
+        # 360 orbit (back-of-shelf masks drag the bottom shelf below the
+        # cutoff). That is now root-fixed at the source: the bookshelf route
+        # asserts wall-adjacency -> front-arc imaging -> ~26 gentle masks ->
+        # 0.60 keeps ~96% (the v32 result). So the guard is back to the uniform
+        # 0.22 and the picker lands the clean 0.60 on its own.
+        COLLAPSE_DROP = 0.22   # relative kept-fraction drop signalling collapse
+        kept_cands = [cands[0]]
+        for prev, cur in zip(cands, cands[1:]):
+            pf = prev["frac_kept"]
+            rel_drop = (pf - cur["frac_kept"]) / pf if pf > 0 else 1.0
+            if rel_drop > COLLAPSE_DROP:
+                print(f"[auto] collapse-guard: thr {cur['thresh']:.2f} drops "
+                      f"{100*rel_drop:.0f}% vs {prev['thresh']:.2f} "
+                      f"(body collapse) — excluding it + all stricter thresholds")
+                break
+            kept_cands.append(cur)
+        if len(kept_cands) < len(cands):
+            print(f"[auto] picker sees safe thresholds only: "
+                  f"{[c['thresh'] for c in kept_cands]}")
+        ci = qwen_pick(kept_cands, label, pipe_union=pipe_union)
+        thresh = kept_cands[ci]["thresh"]
         print(f"[auto] Qwen-chosen threshold = {thresh:.2f}")
     else:
         thresh = args.keep_thresh

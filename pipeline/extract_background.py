@@ -42,19 +42,10 @@ ITERATION_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ITERATION_DIR))
 from sam_carve import render_canonical_5  # noqa: E402
 
-# Stage to inspect for each object — pick the most-final PLY available.
-OBJECT_STAGE_PREFERENCE = [
-    "5_subtracted",
-    "5_bookshelf_sweep",
-    "4_rug",
-    "5_sweep_fallback",
-    "4_sam_tight",
-    "3_floor_drop",
-    "2_pitch_sweep_refined",   # phase 4 wall art
-    "1_visual_hull",           # companions (TV speaker/remote, shelf items)
-]
-
-
+# (Retired 2026-05-29: dead local OBJECT_STAGE_PREFERENCE — the background
+# subtract uses the UNION of SUBTRACT_STAGES via find_object_plys, not a
+# single most-final pick. NOTE: SUBTRACT_STAGES still omits 8_final/7_final/
+# 6_inside_outside — that is a SEPARATE open audit finding, not fixed here.)
 SUBTRACT_STAGES = [
     "1_visual_hull", "2_sam_wide", "3_floor_drop",
     "4_sam_tight", "4_rug",
@@ -71,11 +62,6 @@ def find_object_plys(obj_dir: Path) -> list[Path]:
     The puzzle piece in final_outputs/ still uses the most-refined stage."""
     return [obj_dir / f"{s}.ply" for s in SUBTRACT_STAGES
              if (obj_dir / f"{s}.ply").exists()]
-
-
-def find_object_ply(obj_dir: Path) -> Path | None:
-    plys = find_object_plys(obj_dir)
-    return plys[-1] if plys else None  # last stage = most-refined
 
 
 def main():

@@ -1,8 +1,13 @@
-# Pipeline order — authoritative source of truth
+# Pipeline order — HISTORICAL (last updated 2026-05-05)
 
-This file is THE order. If anything (script docs, my memory, our chat) disagrees with this file, this file wins. Updated as we build.
-
-Last updated: 2026-05-05
+> ⚠️ **OUTDATED for the per-object chain.** This file predates the `8_final`
+> rework and the 2026-05-27 `floor_drop`-after-`sam_tight` reorder. The
+> per-object stage table below ends at `4_sam_tight`; the real chain now runs
+> through `5_sweep_fallback → 6_inside_outside → stage_pick → 7_destreak →
+> **8_final**`. For the current chain + module map see **`ARCHITECTURE.md`**
+> and `procedure_dispatch.py` (the live dispatcher). The "Locked constants"
+> table further down may also have drifted — verify against the code before
+> relying on a value. Kept for history / the locked-pair rationale notes.
 
 ---
 

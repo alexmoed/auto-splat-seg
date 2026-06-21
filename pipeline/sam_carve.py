@@ -1160,6 +1160,25 @@ def render_canonical_5(ply_path: Path, out_dir: Path):
     Image.fromarray(img).save(out_dir / "topdown.png")
 
 
+def _write_wall_verdict(obj_dir: Path, is_wall, reason: str,
+                         wide_pad_per_side: float):
+    """ALWAYS write wall_adjacent.json so downstream get_wall_skip_callable has
+    a deterministic file, never the silent 'file missing -> keep all cameras'
+    fallback. On any producer error / early-return we record
+    wall_adjacent=False (= keep all cameras = the historical default). The
+    classes that NEED front-arc (bookshelf + wall-flush storage) assert it
+    explicitly on their dispatch route, which OVERWRITES this at step 2, so a
+    conservative False here is safe and non-regressing. Returns the verdict
+    dict so callers can `return _write_wall_verdict(...)`."""
+    verdict = {"wall_adjacent": bool(is_wall), "reason": reason,
+               "wide_pad_per_side": wide_pad_per_side}
+    try:
+        (obj_dir / "wall_adjacent.json").write_text(json.dumps(verdict, indent=2))
+    except Exception as e:
+        print(f"[wall-check] could not write wall_adjacent.json: {e}")
+    return verdict
+
+
 def check_wall_adjacent_via_qwen(scene_dir: Path, obj_dir: Path,
                                   wide_pad_per_side: float = 0.10):
     """Build a wider visual hull (default 10% pad per side, vs the tight
@@ -1177,21 +1196,32 @@ def check_wall_adjacent_via_qwen(scene_dir: Path, obj_dir: Path,
       <obj>/wall_adjacent.json  ({"wall_adjacent": bool, "reason": str})
     The wide-hull PLY is built in memory only — not saved to disk.
     """
+    # Every early-return below ALSO writes the verdict (wall_adjacent=False =
+    # keep all cameras), so a normal-but-incomplete state can't leave the file
+    # absent and silently trigger the keep-all fallback downstream.
     meta_path = obj_dir / "1_visual_hull_meta.json"
     if not meta_path.exists():
-        print(f"[wall-check] no meta at {meta_path} — skipping")
-        return
-    meta = json.load(open(meta_path))
+        print(f"[wall-check] no meta at {meta_path} — defaulting wall_adjacent=False")
+        return _write_wall_verdict(obj_dir, False, "no 1_visual_hull_meta.json",
+                                   wide_pad_per_side)
+    try:
+        meta = json.load(open(meta_path))
+    except Exception as e:
+        print(f"[wall-check] meta unreadable ({e}) — defaulting wall_adjacent=False")
+        return _write_wall_verdict(obj_dir, False, f"meta unreadable: {e}",
+                                   wide_pad_per_side)
     bbox_tight = meta.get("bbox_pixels_tight")
     cam = meta.get("camera")
     source_ply_path = meta.get("source_ply")
     if not (bbox_tight and cam and source_ply_path):
-        print(f"[wall-check] meta missing required fields — skipping")
-        return
+        print(f"[wall-check] meta missing required fields — defaulting wall_adjacent=False")
+        return _write_wall_verdict(obj_dir, False, "meta missing bbox/camera/source",
+                                   wide_pad_per_side)
     source_ply = Path(source_ply_path)
     if not source_ply.exists():
-        print(f"[wall-check] source PLY missing: {source_ply} — skipping")
-        return
+        print(f"[wall-check] source PLY missing: {source_ply} — defaulting wall_adjacent=False")
+        return _write_wall_verdict(obj_dir, False, f"source PLY missing: {source_ply}",
+                                   wide_pad_per_side)
 
     # Widen the bbox to ±wide_pad_per_side. Done in pixels.
     img_w, img_h = cam["width"], cam["height"]
@@ -1280,21 +1310,30 @@ def check_wall_adjacent_via_qwen(scene_dir: Path, obj_dir: Path,
     )})
 
     print(f"[wall-check] asking Qwen...")
-    r = client.chat.completions.create(
-        model=QWEN_MODEL,
-        messages=[{"role": "user", "content": content}],
-        max_tokens=20, temperature=0.1,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-    )
-    raw = r.choices[0].message.content.strip()
+    # The call must not crash the extract: the PLY + meta are already on disk,
+    # so a vLLM outage here would otherwise exit non-zero with no verdict file
+    # (then downstream silently keeps all cameras). On any failure we record a
+    # conservative False and carry on; routes that need front-arc assert it.
+    try:
+        r = client.chat.completions.create(
+            model=QWEN_MODEL,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=20, temperature=0.1,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        raw = (r.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[wall-check] qwen call failed ({e}) — defaulting wall_adjacent=False")
+        return _write_wall_verdict(obj_dir, False, f"qwen error: {e}",
+                                   wide_pad_per_side)
     print(f"[wall-check] qwen raw: {raw!r}")
-    is_wall = raw.upper().startswith("YES")
+    # Robust parse: accept an affirmative anywhere (e.g. "It is up against a
+    # wall, YES") but never flip a leading NO. Bare startswith('YES') silently
+    # coerced any non-canonical affirmative to False.
+    up = raw.upper()
+    is_wall = bool(re.search(r"\bYES\b", up)) and not up.startswith("NO")
 
-    verdict = {"wall_adjacent": is_wall, "reason": raw,
-                "wide_pad_per_side": wide_pad_per_side}
-    out_path = obj_dir / "wall_adjacent.json"
-    out_path.write_text(json.dumps(verdict, indent=2))
-    print(f"[wall-check] wrote {out_path}")
+    verdict = _write_wall_verdict(obj_dir, is_wall, raw, wide_pad_per_side)
     print(f"[wall-check] verdict: wall_adjacent={is_wall}")
     return verdict
 

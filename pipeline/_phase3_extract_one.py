@@ -41,7 +41,7 @@ from plyfile import PlyData, PlyElement
 ITERATION_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ITERATION_DIR))
 from extract_one import (  # noqa: E402
-    viewmat_look_at, build_K, project_to_pixels, slugify, render_topdown_simple)
+    viewmat_look_at, build_K, project_to_pixels, slugify)
 
 # Diorama params — MUST MATCH _phase2_dioramas.py
 W, H = 3840, 2160

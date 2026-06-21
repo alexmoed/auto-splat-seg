@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """info.py — Final descriptive metadata for an extracted object.
 
-Sends the 4 canonical yaws of `4_sam_tight.ply` (renders/4_sam_tight/
-y{0,90,180,270}.png) to Qwen as a multi-image request and writes a
-structured JSON description to `<obj>/info.json`.
+Renders 13 fresh views (8 yaws + 4 oblique + topdown) of the object's
+picked final stage (see stage_preference.py), sends them to Qwen as a
+multi-image request, and writes a structured JSON description to
+`<obj>/info.json`.
 
 Color is baked into each name string (e.g. "beige armchair", "brown
 throw blanket"), no separate colors[] array.
 
 Reads:
-  <obj>/renders/4_sam_tight/{y0,y90,y180,y270}.png
-  <obj>/1_visual_hull_meta.json   (for the inventory label)
+  <obj>/<final-stage>.ply          (most-refined stage; see stage_preference)
+  <obj>/1_visual_hull_meta.json    (for the inventory label)
 
 Writes:
   <obj>/info.json
@@ -33,6 +34,9 @@ from PIL import Image
 
 sys.path.insert(0, "/home/ubuntu/.claude/skills/gsplat-viewer/scripts")
 from view import load_gsplat_ply, render_splat  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stage_preference import pick_stage, STAGE_PREFERENCE  # noqa: E402
 
 sys.path.insert(0, "/home/ubuntu/room_pipeline_v002/pipeline")
 from sam_carve import build_camera  # noqa: E402
@@ -137,28 +141,13 @@ def main():
     scene = args.scene_dir.resolve()
     obj = args.obj_dir.resolve()
 
-    # Prefer the latest stage's output: 5_sweep_fallback (bbox-sweep
-    # recovery) > 5_bookshelf_sweep > 4_sam_tight > 3_floor_drop.
-    # 5_sweep_fallback wins because its presence means an earlier
-    # stage was rejected.
-    # 5_subtracted (parent with children carved out) > class-specific
-    # finals (5_bookshelf_sweep, 4_rug) > sam_tight > sweep_fallback
-    # (safety net) > earlier stages. The dispatcher renames
-    # 4_sam_tight.ply → 4_sam_tight_rejected.ply on qc REJECT, which
-    # makes 5_sweep_fallback the highest-ranked existing stage on the
-    # recovery pass.
-    # 2026-05-20 — prefer stage_pick's 7_final.ply > 6_inside_outside.ply
-    # > earlier stages. The renders/ dir matches: renders/7_final/
-    # exists when stage_pick ran, renders/6_inside_outside/ when only
-    # inside_outside ran, etc.
-    stage_candidates = ["7_final", "6_inside_outside",
-                         "5_subtracted", "5_bookshelf_sweep", "4_rug",
-                         "4_sam_tight", "5_sweep_fallback", "3_floor_drop"]
-    stage = next((s for s in stage_candidates if (obj / f"{s}.ply").exists()), None)
+    # Pick the object's final stage via the shared canonical preference
+    # (stage_preference.py — single source of truth). 8_final = stage_pick's
+    # picked + destreaked deliverable and sits at the top of the list.
+    stage, in_ply = pick_stage(obj)
     if stage is None:
         sys.exit(f"[fatal] no stage PLY found in {obj} (looked for: "
-                 f"{', '.join(s + '.ply' for s in stage_candidates)})")
-    in_ply = obj / f"{stage}.ply"
+                 f"{', '.join(s + '.ply' for s in STAGE_PREFERENCE)})")
 
     # Render 13 fresh views (8 yaws + 4 oblique + topdown) of the picked
     # PLY for an independent review. Saved to renders/info_review/.

@@ -3,11 +3,10 @@
 scene background into a single deliverable folder of .splat files
 (32-byte-per-splat binary format used by web viewers).
 
-For each <scene>/02_<obj>/, picks the most-final PLY available
-(5_subtracted > 5_bookshelf_sweep > 4_rug > 5_sweep_fallback >
-4_sam_tight), converts it to .splat, and writes
-<scene>/final_outputs/<obj>.splat. Also converts scene_background.ply
-if present.
+For each <scene>/02_<obj>/, picks the most-final PLY available via the
+shared stage_preference order (led by stage_pick's 8_final), converts it
+to .splat, and writes <scene>/final_outputs/<obj>.splat. Also converts
+scene_background.ply if present.
 
 Pass --keep-ply to also include the source PLY alongside each .splat.
 
@@ -23,19 +22,12 @@ import sys
 from pathlib import Path
 
 ITERATION_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(ITERATION_DIR))
 
-OBJECT_STAGE_PREFERENCE = [
-    "7_final",                 # 2026-05-20 — stage_pick output (preferred)
-    "6_inside_outside",        # 2026-05-20 — multi-mask final stage
-    "5_subtracted",
-    "5_bookshelf_sweep",
-    "4_rug",
-    "5_sweep_fallback",
-    "4_sam_tight",
-    "3_floor_drop",
-    "2_pitch_sweep_refined",   # phase 4 wall art
-    "1_visual_hull",           # companions (TV speaker/remote, shelf items)
-]
+# Object stage preference is the shared canonical list (stage_preference.py),
+# led by stage_pick's 8_final. Previously this led with the never-written
+# 7_final, so the shipped .splat deliverable was a pre-pick/pre-destreak stage.
+from stage_preference import STAGE_PREFERENCE as OBJECT_STAGE_PREFERENCE  # noqa: E402
 
 
 def find_final_ply(obj_dir: Path) -> tuple[Path | None, str | None]:
@@ -109,7 +101,10 @@ def main():
             if mp.exists():
                 try:
                     m = json.load(open(mp))
-                    label = m.get("object_type") or m.get("label")
+                    # info.py writes the rich Qwen name under 'name'
+                    # (rename_to_qwen already reads it first); fall back to
+                    # the coarser object_type/label for non-info metas.
+                    label = m.get("name") or m.get("object_type") or m.get("label")
                     if label:
                         break
                 except Exception:
